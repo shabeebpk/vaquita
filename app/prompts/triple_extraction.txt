@@ -1,0 +1,28 @@
+You are an information extraction system.
+
+Extract ONLY factual relations that are explicitly stated in the text.
+
+Return STRICTLY valid JSON.
+Return NOTHING except the JSON object.
+
+Schema:
+{
+  "triples": [
+    {
+      "subject": "string",
+      "predicate": "string",
+      "object": "string"
+    }
+  ]
+}
+
+Rules:
+- Use ONLY information explicitly present in the text.
+- Do NOT infer, assume, summarize, or generalize.
+- Do NOT invent authorship, publication, affiliation, or metadata.
+- If any part of a triple is unclear or implicit, DO NOT emit that triple.
+- All values must be non-empty strings.
+- If no valid triples exist, return {"triples": []}.
+
+Text:
+"{block_text}"
