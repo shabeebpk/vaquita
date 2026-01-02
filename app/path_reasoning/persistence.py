@@ -36,6 +36,8 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
                 confidence=int(h.get("confidence", 0)),
                 mode=h.get("mode", "explore"),
                 query_id=query_id,
+                passed_filter=h.get("passed_filter", False),
+                filter_reason=h.get("filter_reason", None),
                 created_at=datetime.utcnow(),
             )
             session.add(row)
@@ -45,16 +47,22 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
     return inserted
 
 
-def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0) -> List[Dict]:
+def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejected: bool = False) -> List[Dict]:
     """Fetch hypotheses for a job for UI listing.
 
     Returns a list of dicts.
     """
     with Session(engine) as session:
-        rows = (
+        query = (
             session.query(Hypothesis)
             .filter(Hypothesis.job_id == job_id)
-            .order_by(Hypothesis.confidence.desc(), Hypothesis.created_at.desc())
+        )
+        
+        if not include_rejected:
+            query = query.filter(Hypothesis.passed_filter == True)
+            
+        rows = (
+            query.order_by(Hypothesis.confidence.desc(), Hypothesis.created_at.desc())
             .limit(limit)
             .offset(offset)
             .all()
@@ -70,7 +78,10 @@ def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0) -> List[Dict]
                 "explanation": r.explanation,
                 "confidence": r.confidence,
                 "mode": r.mode,
+                "mode": r.mode,
                 "query_id": r.query_id,
+                "passed_filter": r.passed_filter,
+                "filter_reason": r.filter_reason,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
         return result

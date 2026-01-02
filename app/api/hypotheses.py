@@ -79,7 +79,11 @@ def post_query_hypotheses(job_id: int, req: QueryRequest):
         allow_len3=bool(req.allow_len3),
     )
 
-    # Persist hypotheses with query_id
+    # Phase-4.5: Filtering
+    from app.path_reasoning.filtering import filter_hypotheses
+    hyps = filter_hypotheses(hyps, semantic_graph)
+
+    # Persist hypotheses with query_id (all of them, including rejected)
     persist_hypotheses(job_id=job_id, hypotheses=hyps, query_id=qid)
 
     # Return results (convert to HypothesisOut shapes as returned by persist/get)
@@ -96,8 +100,14 @@ def post_query_hypotheses(job_id: int, req: QueryRequest):
             "explanation": h.get("explanation"),
             "confidence": h.get("confidence"),
             "mode": h.get("mode"),
+            "mode": h.get("mode"),
             "query_id": qid,
+            "passed_filter": h.get("passed_filter", False),
+            "filter_reason": h.get("filter_reason"),
             "created_at": None,
         })
+
+    # Return only filtered (passed) hypotheses to the user
+    out = [h for h in out if h["passed_filter"]]
 
     return QueryResponse(query_id=qid, hypotheses=out)

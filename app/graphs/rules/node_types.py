@@ -109,6 +109,26 @@ NOISE_BLACKLIST = {
     "",
 }
 
+PUBLISHER_KEYWORDS = {
+    "arxiv",
+    "pubmed",
+    "ieee",
+    "springer",
+    "elsevier",
+    "acm",
+    "nature",
+    "science",
+    "neurips",
+    "icml",
+    "iclr",
+    "aaai",
+    "cvpr",
+    "eccv",
+    "sigir",
+    "kdd",
+}
+
+
 
 def classify_node(node: str, ner_label: str = None) -> str:
     """Classify a single node into one of: concept, entity, metadata, citation, noise.
@@ -153,6 +173,8 @@ def classify_node(node: str, ner_label: str = None) -> str:
     if re.match(NUMERIC_ONLY_PATTERN, n) and len(n) <= 5:
         return "metadata"
     if re.match(UUID_LIKE_PATTERN, n):
+        return "metadata"
+    if n.lower() in PUBLISHER_KEYWORDS:
         return "metadata"
     
     # Entity: NER label, acronym, or proper case

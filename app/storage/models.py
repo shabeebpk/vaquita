@@ -102,6 +102,10 @@ class Hypothesis(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     # Nullable FK to reasoning_queries.id — NULL for explore-mode hypotheses
     query_id = Column(Integer, ForeignKey("reasoning_queries.id"), nullable=True, index=False)
+    
+    # Phase-4.5 Filtering Results
+    passed_filter = Column(Boolean, default=False, nullable=False)
+    filter_reason = Column(JSONB, nullable=True)
 
 
 class ReasoningQuery(Base):
@@ -111,3 +115,23 @@ class ReasoningQuery(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
     query_text = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionResult(Base):
+    """Stores Phase-5 (Decision & Control) outputs.
+    
+    One row per decision-making run (typically one per job after Phase-4.5).
+    Captures the decision label, measurements snapshot, provider used, and metadata
+    for auditability and reproducibility.
+    """
+    __tablename__ = "decision_results"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    decision_label = Column(String, nullable=False)  # e.g., "halt_confident", "ask_user_input"
+    provider_used = Column(String, nullable=False)  # "rule_based", "llm", etc.
+    measurements_snapshot = Column(JSONB, nullable=False)  # all measurements at decision time
+    fallback_used = Column(Boolean, default=False, nullable=False)  # true if LLM fallback was used
+    fallback_reason = Column(Text, nullable=True)  # why fallback occurred
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, nullable=True)

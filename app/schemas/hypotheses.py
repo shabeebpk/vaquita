@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 class HypothesisOut(BaseModel):
-    id: int
+    id: Optional[int]
     job_id: int
     source: str
     target: str
@@ -12,6 +12,8 @@ class HypothesisOut(BaseModel):
     confidence: int
     mode: str
     query_id: Optional[int] = None
+    passed_filter: bool = False
+    filter_reason: Optional[dict] = None
     created_at: Optional[str] = None
 
 class ExploreResponse(BaseModel):

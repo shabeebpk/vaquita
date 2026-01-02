@@ -1,7 +1,6 @@
 
 ## After cloned repo do this
 
-
 # To create a python virutal env, (Must at root folder MainProject)
 python3 -m venv projenv
 source projenv/bin/activate

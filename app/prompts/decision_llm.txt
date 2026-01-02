@@ -1,0 +1,16 @@
+Based on the following measurements from a knowledge graph reasoning system, decide what the system should do next. You must respond with exactly one decision label from: {decision_labels}
+
+Measurements:
+- Total hypotheses: {total_hypothesis_count}
+- Passed hypotheses: {passed_hypothesis_count}
+- Rejected hypotheses: {rejected_hypothesis_count}
+- Max normalized confidence: {max_normalized_confidence:.2f}
+- Mean normalized confidence: {mean_normalized_confidence:.2f}
+- Diversity score: {diversity_score:.2f}
+- Graph density: {graph_density:.2f}
+- Is dominant clear: {is_dominant_clear}
+- Unique source-target pairs: {unique_source_target_pairs}
+
+User text: {job_user_text}
+
+Your response must be a single decision label, nothing else.

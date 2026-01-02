@@ -1,0 +1,8 @@
+Based on the following user input, generate ONE focused clarification question to help disambiguate the query:
+
+User Input: {user_text}
+
+Measurements context: {ambiguity_score:.2f} ambiguity
+
+Generate a single, actionable question the user can answer in a few sentences.
+Format: <question only, no preamble>

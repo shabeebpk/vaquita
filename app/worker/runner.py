@@ -291,6 +291,8 @@ def process_job_stage(job_id: int) -> None:
                 stoplist_env = os.getenv("PATH_REASONING_STOPLIST", "")
                 stoplist = set(s.strip().lower() for s in stoplist_env.split(",") if s.strip()) if stoplist_env else None
 
+                from app.path_reasoning.filtering import filter_hypotheses
+
                 hypotheses = run_path_reasoning(
                     persisted,
                     reasoning_mode=reasoning_mode,
@@ -300,6 +302,10 @@ def process_job_stage(job_id: int) -> None:
                     stoplist=stoplist,
                 )
 
+                # Phase-4.5: Filtering
+                # Modifies hypotheses dicts in-place with passed_filter/filter_reason keys
+                hypotheses = filter_hypotheses(hypotheses, persisted)
+
                 inserted = persist_hypotheses(job_id, hypotheses)
 
                 emit_event(eq, "path_reasoning", {"mode": reasoning_mode, "hypotheses_count": len(hypotheses), "inserted": inserted})
@@ -307,10 +313,150 @@ def process_job_stage(job_id: int) -> None:
 
                 job.status = "PATH_REASONING_DONE"
                 session.commit()
-                logger.info(f"Job {job_id} path reasoning complete: {len(hypotheses)} hypotheses persisted={inserted}")
+
+                passed = 0
+                for o in hypotheses:
+                    if o.get("passed_filter"):
+                        passed += 1
+
+                logger.info(f"Job {job_id} path reasoning complete: {len(hypotheses)} hypotheses, {passed} passed filter, {inserted} persisted")
+                job_queue.put(6) #delete this
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Path reasoning failed for job {job_id}: {e}")
+        
+
+        # Status: PATH_REASONING_DONE → Run decision & control (Phase-5)
+        elif job.status == "PATH_REASONING_DONE":
+            emit_event(eq, "status", "Starting decision & control for job")
+            logger.info(f"Job {job_id} is PATH_REASONING_DONE — running decision & control")
+            try:
+                from app.graphs.persistence import get_semantic_graph
+                from app.path_reasoning.persistence import get_hypotheses
+                from app.decision.controller import get_decision_controller
+
+                # Load persisted semantic graph
+                persisted_graph = get_semantic_graph(job_id)
+                if not persisted_graph:
+                    msg = (
+                        f"Persisted semantic graph for job {job_id} not found. "
+                        "Phase-3 must persist the semantic graph before Phase-5."
+                    )
+                    emit_event(eq, "error", msg)
+                    job.status = "FAILED"
+                    session.commit()
+                    logger.error(msg)
+                    return
+
+                # Load persisted hypotheses (both explore and query modes)
+                hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0)
+
+                # Prepare job metadata
+                job_metadata = {
+                    "id": job.id,
+                    "status": job.status,
+                    "user_text": job.user_text or "",
+                    "created_at": job.created_at.isoformat() if job.created_at else None,
+                }
+
+                # Invoke decision controller
+                controller = get_decision_controller()
+                decision_result = controller.decide(
+                    job_id=job_id,
+                    semantic_graph=persisted_graph,
+                    hypotheses=hypotheses,
+                    job_metadata=job_metadata,
+                )
+
+                emit_event(eq, "decision", decision_result)
+                logger.info(f"Job {job_id} decision complete: {decision_result['decision_label']} and \n\n decisions: {decision_result} \n\n")
+
+                # Update job status to reflect decision-making is complete
+                job.status = "DECISION_MADE"
+                session.commit()
+                emit_event(eq, "status", f"Decision made: {decision_result['decision_label']}")
+
+            except Exception as e:
+                emit_event(eq, "error", str(e))
+                logger.error(f"Decision & control failed for job {job_id}: {e}")
+        
+        # Status: DECISION_MADE → Run decision handlers (Control Layer)
+        elif job.status == "DECISION_MADE":
+            emit_event(eq, "status", "Starting decision handler execution")
+            logger.info(f"Job {job_id} is DECISION_MADE — running decision handlers")
+            try:
+                from app.graphs.persistence import get_semantic_graph
+                from app.path_reasoning.persistence import get_hypotheses
+                from app.decision.handlers.controller import get_handler_controller
+
+                # Load persisted artifacts for handler execution
+                persisted_graph = get_semantic_graph(job_id)
+                if not persisted_graph:
+                    logger.warning(f"Semantic graph for job {job_id} not found for handler execution")
+                    persisted_graph = {}
+
+                hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0) or []
+
+                # Prepare job metadata
+                job_metadata = {
+                    "id": job.id,
+                    "status": job.status,
+                    "user_text": job.user_text or "",
+                    "created_at": job.created_at.isoformat() if job.created_at else None,
+                }
+
+                # Load the decision result from DB for handler
+                from app.storage.models import DecisionResult
+                decision_record = session.query(DecisionResult).filter(
+                    DecisionResult.job_id == job_id
+                ).order_by(DecisionResult.created_at.desc()).first()
+
+                if not decision_record:
+                    msg = f"No decision result found for job {job_id}"
+                    emit_event(eq, "error", msg)
+                    logger.error(msg)
+                    return
+
+                decision_result = {
+                    "decision_label": decision_record.decision_label,
+                    "provider_used": decision_record.provider_used,
+                    "measurements": decision_record.measurements_snapshot or {},
+                    "fallback_used": decision_record.fallback_used,
+                    "fallback_reason": decision_record.fallback_reason,
+                }
+
+                # Invoke handler controller
+                handler_controller = get_handler_controller()
+                handler_result = handler_controller.execute_handler(
+                    decision_label=decision_result["decision_label"],
+                    job_id=job_id,
+                    decision_result=decision_result,
+                    semantic_graph=persisted_graph,
+                    hypotheses=hypotheses,
+                    job_metadata=job_metadata,
+                )
+
+                emit_event(eq, "handler_result", {
+                    "decision_label": decision_result["decision_label"],
+                    "handler_status": handler_result.status,
+                    "message": handler_result.message,
+                    "next_action": handler_result.next_action,
+                })
+
+                logger.info(
+                    f"Job {job_id} handler execution complete: "
+                    f"decision={decision_result['decision_label']}, "
+                    f"status={handler_result.status}, "
+                    f"message={handler_result.message}"
+                )
+
+                # Emit handler data if available
+                if handler_result.data:
+                    emit_event(eq, "handler_data", handler_result.data)
+
+            except Exception as e:
+                emit_event(eq, "error", str(e))
+                logger.error(f"Handler execution failed for job {job_id}: {e}")
 
         # Status: NEED_MORE_INPUT → Pause
         elif job.status == "NEED_MORE_INPUT":

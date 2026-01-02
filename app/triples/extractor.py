@@ -5,30 +5,35 @@ Public API:
   result = extractor.extract(block_text)  # -> dict or None
 
 Strict contract: returns either a dict matching {"triples": [{subject,predicate,object}]} or None.
+
+Uses the global LLM service (app.llm.service) for all LLM calls.
+Loads prompts via the centralized prompt loader (app.prompts.loader).
+No provider-specific imports or logic here.
 """
 import os
 import json
 import logging
 from typing import Optional
 
-from .providers import get_adapter
+from app.llm import get_llm_service
+from app.prompts.loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "triple_extraction.txt")
+# Fallback template if prompt file is missing
+TRIPLE_EXTRACTION_FALLBACK = """{block_text}"""
 
 
 class TripleExtractor:
     def __init__(self, provider_name: Optional[str] = None):
-        self.provider_name = provider_name or os.environ.get("TRIPLE_PROVIDER", "dummy")
-        self.adapter = get_adapter(self.provider_name)
-        try:
-            with open(PROMPT_PATH, "r", encoding="utf-8") as f:
-                self.prompt_template = f.read()
-        except Exception:
-            # Minimal fallback
-            self.prompt_template = "{block_text}"
+        # provider_name is kept for backward compatibility but ignored
+        # All LLM calls go through the global service now
+        self.llm_service = get_llm_service()
+        # Load prompt template using the centralized loader
+        self.prompt_template = load_prompt(
+            "triple_extraction.txt",
+            fallback=TRIPLE_EXTRACTION_FALLBACK
+        )
 
     def _build_prompt(self, block_text: str) -> str:
         return self.prompt_template.replace("{block_text}", block_text)
@@ -60,25 +65,25 @@ class TripleExtractor:
 
         prompt = self._build_prompt(block_text)
         try:
-            raw = self.adapter.call(prompt)
+            raw = self.llm_service.generate(prompt)
             logger.info(f"returned raw : {raw}")
         except Exception as e:
-            logger.error("Adapter call failed: %s", e)
+            logger.error("LLM call failed: %s", e)
             return None
 
         if not raw or not isinstance(raw, str):
-            logger.debug("Adapter returned empty/non-str response")
+            logger.debug("LLM returned empty/non-str response")
             return None
 
         try:
             parsed = json.loads(raw)
         except Exception as e:
-            logger.warning("Failed to parse JSON from adapter response: %s", e)
+            logger.warning("Failed to parse JSON from LLM response: %s", e)
             logger.debug("Raw response: %s", raw)
             return None
 
         if not self._validate(parsed):
-            logger.warning("Invalid triple schema from adapter")
+            logger.warning("Invalid triple schema from LLM")
             logger.debug("Parsed: %s", parsed)
             return None
 
