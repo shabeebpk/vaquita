@@ -221,8 +221,8 @@ def project_structural_graph(job_id: int) -> Dict:
                     meta["support"] += 1
                 if t.block_id is not None:
                     meta["block_ids"].add(t.block_id)
-                if t.source_id is not None:
-                    meta["source_ids"].add(t.source_id)
+                if t.ingestion_source_id is not None:
+                    meta["source_ids"].add(t.ingestion_source_id)
 
             except Exception as e:
                 logger.error("Error projecting triple %s: %s", getattr(t, "id", None), e)

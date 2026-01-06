@@ -80,13 +80,16 @@ class LLMService:
             from app.llm.adapters import DummyAdapter
             return DummyAdapter()
     
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, **kwargs) -> str:
         """Generate text from a prompt.
         
         This is the ONLY public method of LLMService.
         
         Args:
             prompt: The input prompt string.
+            **kwargs: Optional LLM parameters (temperature, max_tokens, top_p, etc.)
+                     Each adapter filters to only the parameters it supports.
+                     Unsupported parameters are silently ignored (no errors).
         
         Returns:
             Raw text output from the adapter.
@@ -98,14 +101,15 @@ class LLMService:
             - No provider-specific exceptions leak upward
             - Automatic fallback to safe defaults on any error
             - Comprehensive logging
+            - Unsupported kwargs are filtered silently inside adapters
         """
         if not prompt or not isinstance(prompt, str):
             logger.warning(f"generate() called with invalid prompt: {type(prompt)}")
             return ""
         
         try:
-            logger.debug(f"LLM call with adapter={self.adapter.__class__.__name__}")
-            result = self.adapter.call(prompt)
+            logger.debug(f"LLM call with adapter={self.adapter.__class__.__name__}, kwargs={list(kwargs.keys())}")
+            result = self.adapter.call(prompt, **kwargs)
             
             if not result or not isinstance(result, str):
                 logger.debug("LLM returned empty or non-string result")

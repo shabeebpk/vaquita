@@ -28,7 +28,9 @@ class TripleExtractor:
     def __init__(self, provider_name: Optional[str] = None):
         # provider_name is kept for backward compatibility but ignored
         # All LLM calls go through the global service now
+        self.provider_name = provider_name or "llm"
         self.llm_service = get_llm_service()
+        
         # Load prompt template using the centralized loader
         self.prompt_template = load_prompt(
             "triple_extraction.txt",

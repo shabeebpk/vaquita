@@ -1,7 +1,9 @@
 """
 Text normalization using NLTK and deterministic transformations.
 Removes layout noise, fixes encoding, normalizes whitespace, enforces sentence boundaries.
+Optionally applies lexical repair to fix layout-induced word splits.
 """
+import os
 import re
 import unicodedata
 from typing import List
@@ -107,22 +109,30 @@ class TextNormalizer:
         remove_emails: bool = True,
         fix_encoding: bool = True,
         fix_whitespace: bool = True,
-        fix_sentences: bool = True
+        fix_sentences: bool = True,
+        apply_lexical_repair: bool = None
     ) -> tuple:
         """
         Full normalization pipeline.
         
         Args:
             text: raw input text
-            remove_urls: strip URLs
+            extract_urls: strip URLs
             remove_emails: strip email addresses
             fix_encoding: normalize Unicode and quotes
             fix_whitespace: collapse whitespace and line breaks
             fix_sentences: enforce sentence boundaries
+            apply_lexical_repair: if None, reads from ENABLE_LEXICAL_REPAIR env var (default: False)
         
         Returns:
-            canonical normalized text
+            canonical normalized text and extracted URLs tuple
         """
+        # Determine lexical repair setting from parameter or environment
+        if apply_lexical_repair is None:
+            enable_lexical_repair = os.getenv("ENABLE_LEXICAL_REPAIR", "0").lower() in ("1", "true", "yes")
+        else:
+            enable_lexical_repair = apply_lexical_repair
+
         extracted_urls = []
 
         if fix_encoding:
@@ -133,6 +143,12 @@ class TextNormalizer:
 
         if remove_emails:
             text = TextNormalizer.remove_emails(text)
+
+        # Apply lexical repair BEFORE whitespace normalization
+        # Lexical repair works on token boundaries and should happen early
+        if enable_lexical_repair:
+            from app.ingestion.lexical import lexical_repair
+            text = lexical_repair(text)
 
         if fix_whitespace:
             text = TextNormalizer.normalize_whitespace(text)

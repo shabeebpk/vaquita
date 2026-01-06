@@ -88,7 +88,6 @@ class DecisionController:
         # Invoke primary provider
         context = {
             "job_id": job_id,
-            "job_user_text": job_metadata.get("user_text", ""),
             "semantic_graph": semantic_graph,
             "hypotheses": hypotheses,
         }

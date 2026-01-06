@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Default Configuration
 DEFAULT_CONFIG = {
     "hub_degree_threshold": 50,  # Max degree for intermediate nodes
-    "min_confidence": 2,         # Minimum evidence score
+    "min_confidence": 10,         # Minimum evidence score
     "generic_predicates": {"related_to", "mentions", "about"},
     "forbidden_node_types": {"entity", "metadata", "citation", "url"},
 }

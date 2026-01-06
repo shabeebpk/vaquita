@@ -68,7 +68,7 @@ sudo nano /etc/phppgadmin/config.inc.php
 # change 'true' to 'false'
 $conf['extra_login_security'] = false;
 
-# then restart apache2
+# Then restart apache2
 sudo systemctl restart apache2
 
 
@@ -77,3 +77,5 @@ python -m spacy download en_core_web_sm
 
 ## Test graph drawer
 python3 -m scripts.draw_graph --job-id 6
+
+literature_db

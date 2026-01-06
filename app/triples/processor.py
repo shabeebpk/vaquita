@@ -51,11 +51,11 @@ def process_job_triples(job_id: int, provider: str = None) -> dict:
                     triple_row = Triple(
                         job_id=job_id,
                         block_id=block.id,
-                        source_id=block.source_id,
+                        ingestion_source_id=block.ingestion_source_id,
                         subject=t["subject"].strip(),
                         predicate=t["predicate"].strip(),
                         object=t["object"].strip(),
-                        extractor_name=extractor.provider_name,
+                        extractor_name=extractor.provider_name or "llm",
                         created_at=datetime.utcnow()
                     )
                     session.add(triple_row)

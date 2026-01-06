@@ -168,8 +168,7 @@ class LLMDecisionProvider(DecisionProvider):
                 diversity_score=measurements.get('diversity_score', 0.0),
                 graph_density=measurements.get('graph_density', 0.0),
                 is_dominant_clear=measurements.get('is_dominant_clear', False),
-                unique_source_target_pairs=measurements.get('unique_source_target_pairs', 0),
-                job_user_text=context.get('job_user_text', '')
+                unique_source_target_pairs=measurements.get('unique_source_target_pairs', 0)
             )
         except Exception as e:
             logger.error(f"Failed to format decision prompt: {e}")

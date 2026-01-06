@@ -3,11 +3,14 @@ Persistence layer for Phase-3 semantic graphs.
 
 Handles reading and writing SemanticGraph records to the database
 with proper validation and artifact isolation.
+
+Design: Single-active-state per job - only one SemanticGraph exists per job_id at any time.
+On each rebuild, the old graph is deleted before a new one is inserted.
+This ensures no versioning is needed and storage overhead is minimal.
 """
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 from app.storage.models import SemanticGraph
 from app.storage.db import engine
@@ -19,6 +22,10 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
     """
     Persist the Phase-3 semantic graph output to the database.
     
+    Implements single-active-state model: deletes any existing SemanticGraph
+    for the job before inserting the new one. This ensures only one semantic
+    graph exists per job at any given time.
+    
     Args:
         job_id: The job ID this graph belongs to.
         semantic_graph: The complete Phase-3 output dict with nodes, edges, summary.
@@ -28,7 +35,6 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
     
     Raises:
         ValueError: If semantic_graph is missing required keys.
-        IntegrityError: If a semantic graph already exists for this job.
     """
     # Validate structure
     if not isinstance(semantic_graph, dict):
@@ -42,6 +48,17 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
     
     with Session(engine) as session:
         try:
+            # SINGLE-ACTIVE-STATE: Delete existing graph for this job before inserting new
+            existing = session.query(SemanticGraph).filter(
+                SemanticGraph.job_id == job_id
+            ).first()
+            
+            if existing:
+                session.delete(existing)
+                session.flush()  # Flush deletes before inserting
+                logger.info(f"Deleted existing semantic graph for job {job_id} (replacing)")
+            
+            # Create and persist new graph
             record = SemanticGraph(
                 job_id=job_id,
                 graph=semantic_graph,  # stored as JSONB unchanged
@@ -57,11 +74,11 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
                 f"node_count={node_count}, edge_count={edge_count}"
             )
             return record
-        except IntegrityError as e:
+        except Exception as e:
             session.rollback()
-            msg = f"Semantic graph already exists for job {job_id}"
+            msg = f"Failed to persist semantic graph for job {job_id}: {e}"
             logger.error(msg)
-            raise IntegrityError(msg, "", "", "") from e
+            raise ValueError(msg) from e
 
 
 def get_semantic_graph(job_id: int) -> dict | None:

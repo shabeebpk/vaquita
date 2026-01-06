@@ -1,17 +1,19 @@
 """
-Unified ingestion service: orchestrates extraction, aggregation, normalization, and segmentation.
-This is the single gate for all text processing in the system.
+Ingestion service: processes IngestionSource rows in a loop for a job.
+
+Responsibility: Read unprocessed IngestionSource rows, apply in-memory normalization,
+segment into TextBlock rows with provenance, mark source as processed, and update job
+status. No aggregation, no intent understanding, no dependencies on downstream phases.
+This service is idempotent and safe to retry after failures.
 """
 import logging
-from typing import List, Tuple, Optional
+from typing import Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import asc
 
-from app.ingestion.extractors import DocumentExtractor
 from app.ingestion.normalizer import TextNormalizer
-from app.ingestion.aggregator import TextAggregator
 from app.ingestion.segmenter import TextSegmenter
-from app.ingestion.lexical import lexical_repair
-from app.storage.models import IngestionSource, NormalizedText, TextBlock
+from app.storage.models import Job, IngestionSource, TextBlock
 from app.storage.db import engine
 
 logger = logging.getLogger(__name__)
@@ -19,185 +21,244 @@ logger = logging.getLogger(__name__)
 
 class IngestionService:
     """
-    Unified ingestion service: extract → aggregate → normalize → segment.
-    All text enters here; exits as canonical normalized blocks in DB.
+    Processes IngestionSource rows in a loop per job.
+    
+    Workflow:
+    1. Query database for all unprocessed IngestionSource rows for a job
+    2. For each source (in creation order):
+       a. Read raw_text
+       b. Normalize in-memory (not stored separately)
+       c. Segment normalized text into blocks
+       d. Create TextBlock rows linked to the source
+       e. Mark source as processed = true
+    3. Repeat until no unprocessed sources remain
+    4. Set job status to INGESTED
+    
+    This design ensures idempotency and supports iterative expansion
+    (new sources added later trigger another ingestion pass).
     """
 
     @staticmethod
     def ingest_job(
         job_id: int,
-        user_text: str,
-        file_paths: List[Tuple[str, str]],  # [(path, file_type), ...]
         segmentation_strategy: str = "sentences",
         segmentation_kwargs: Optional[dict] = None,
         normalization_kwargs: Optional[dict] = None,
     ) -> dict:
         """
-        Full ingestion pipeline for a job.
+        Process all unprocessed IngestionSource rows for a job in a loop.
+        
+        Responsibility: Execute text processing only. Do not decide pipeline flow,
+        trigger other phases, or infer next actions. Caller (runner.py) controls
+        when this is invoked and what happens next.
         
         Args:
-            job_id: ID of the job
-            user_text: user's query/instruction
-            file_paths: list of (file_path, file_type) tuples
-                E.g., [('/path/to/paper.pdf', 'pdf'), ('/path/to/doc.docx', 'docx')]
+            job_id: ID of the job to ingest
             segmentation_strategy: 'sentences', 'paragraphs', 'length', 'sections'
-            segmentation_kwargs: strategy-specific params (sentences_per_block, block_length, etc.)
-            normalization_kwargs: config for TextNormalizer.normalize()
+            segmentation_kwargs: strategy-specific parameters
+            normalization_kwargs: configuration for text normalization
         
         Returns:
-            dict with keys:
+            dict with summary:
                 - job_id
-                - user_text
-                - ingestion_sources (count)
-                - canonical_text_length
-                - text_blocks (count)
-                - blocks (sample of first 3)
+                - sources_processed: count of IngestionSource rows processed
+                - blocks_created: total TextBlock rows created
+        
+        Raises:
+            ValueError: if job not found
+            RuntimeError: if job status is not exactly READY_TO_INGEST
         """
         if segmentation_kwargs is None:
-            segmentation_kwargs = {}
+            segmentation_kwargs = {"sentences_per_block": 3}
         if normalization_kwargs is None:
             normalization_kwargs = {}
 
-        logger.info(f"Starting ingestion for job {job_id}")
+        logger.info(f"Starting ingestion loop for job {job_id}")
 
         with Session(engine) as session:
-            # Step 1: Extract text from all files
-            logger.info(f"Extracting text from {len(file_paths)} files")
-            extracted_texts = []
-            for file_path, file_type in file_paths:
-                try:
-                    extracted_chunks = DocumentExtractor.extract_from_file(file_path, file_type)
-                    # Combine chunks from same file into one text
-                    combined_text = ' '.join([chunk[0] for chunk in extracted_chunks])
-
-                    # Run conservative lexical repair to fix layout-induced splits
-                    try:
-                        combined_text = lexical_repair(combined_text)
-                    except Exception as e:
-                        logger.debug(f"Lexical repair failed for {file_path}: {e}")
-                    source_ref = file_path.split('/')[-1]  # filename only
-                    extracted_texts.append((file_type, source_ref, combined_text))
-                    
-                    logger.info(f"Extracted {len(combined_text)} chars from {source_ref}")
-                except Exception as e:
-                    logger.error(f"Failed to extract {file_path}: {str(e)}")
-                    continue
-
-            # Step 2: Store raw extracted texts in DB
-            for source_type, source_ref, raw_text in extracted_texts:
-                source = IngestionSource(
-                    job_id=job_id,
-                    source_type=source_type,
-                    source_ref=source_ref,
-                    raw_text=raw_text
+            # Verify job exists and status is exactly READY_TO_INGEST (hard fail)
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                raise ValueError(f"Job {job_id} not found")
+            
+            if job.status != "READY_TO_INGEST":
+                raise RuntimeError(
+                    f"Cannot ingest job {job_id}: status is '{job.status}', expected 'READY_TO_INGEST'. "
+                    "Caller must ensure job is in correct state before invoking ingestion."
                 )
-                session.add(source)
-            session.commit()
 
-            # Step 3: Normalize & Segment each source independently and store blocks with provenance
-            logger.info("Normalizing and segmenting each source separately")
+            sources_processed = 0
+            blocks_created = 0
 
-            # Refresh sources from DB so we have their IDs
-            sources = session.query(IngestionSource).filter_by(job_id=job_id).all()
+            # Ingestion loop: process unprocessed sources in order
+            while True:
+                # Query for the next unprocessed source (order by creation time)
+                unprocessed_source = (
+                    session.query(IngestionSource)
+                    .filter(
+                        IngestionSource.job_id == job_id,
+                        IngestionSource.processed == False
+                    )
+                    .order_by(asc(IngestionSource.created_at))
+                    .first()
+                )
 
-            normalized_sources = []  # list of (source_type, source_ref, normalized_text)
-            global_block_count = 0
+                if not unprocessed_source:
+                    # No more unprocessed sources; ingestion is complete
+                    logger.info(f"No more unprocessed sources for job {job_id}")
+                    break
 
-            for src in sources:
+                logger.info(
+                    f"Processing IngestionSource {unprocessed_source.id} "
+                    f"(source_type={unprocessed_source.source_type}, "
+                    f"source_ref={unprocessed_source.source_ref})"
+                )
+
                 try:
-                    norm_text, extracted_urls = TextNormalizer.normalize(src.raw_text, **normalization_kwargs)
-                    # Persist extracted URLs with the source for provenance
-                    try:
-                        src.extracted_urls = extracted_urls
-                        session.add(src)
-                    except Exception:
-                        logger.debug("Could not persist extracted_urls on source row")
-
-                    normalized_sources.append((src.source_type, src.source_ref, norm_text))
-
-                    # Segment per-source normalized text
-                    blocks = TextSegmenter.segment(
-                        norm_text,
-                        strategy=segmentation_strategy,
-                        **segmentation_kwargs
+                    # Step 1: Normalize in-memory (no storage)
+                    normalized_text, extracted_urls = TextNormalizer.normalize(
+                        unprocessed_source.raw_text,
+                        **normalization_kwargs
+                    )
+                    logger.debug(
+                        f"Normalized {len(unprocessed_source.raw_text)} chars → "
+                        f"{len(normalized_text)} chars, "
+                        f"extracted {len(extracted_urls)} URLs"
                     )
 
-                    # Persist blocks with source_id linkage
-                    for rel_order, block_text in enumerate(blocks, 1):
-                        global_block_count += 1
+                    # Step 2: Segment normalized text into blocks
+                    blocks = IngestionService._segment_text(
+                        normalized_text,
+                        segmentation_strategy,
+                        **segmentation_kwargs
+                    )
+                    logger.info(
+                        f"Segmented into {len(blocks)} blocks using '{segmentation_strategy}'"
+                    )
+
+                    # Step 3: Create TextBlock rows with provenance
+                    for block_index, block_text in enumerate(blocks, 1):
                         text_block = TextBlock(
                             job_id=job_id,
+                            ingestion_source_id=unprocessed_source.id,
                             block_text=block_text,
-                            block_order=global_block_count,
-                            source_id=src.id,
+                            block_order=block_index,
                             block_type="text_block",
-                            segmentation_strategy=segmentation_strategy
+                            segmentation_strategy=segmentation_strategy,
+                            triples_extracted=False
                         )
                         session.add(text_block)
+                        blocks_created += 1
+
+                    # Step 4: Mark source as processed and commit immediately
+                    unprocessed_source.processed = True
+                    session.add(unprocessed_source)
+                    session.commit()
+                    sources_processed += 1
+
+                    logger.info(
+                        f"IngestionSource {unprocessed_source.id} processed: "
+                        f"{len(blocks)} blocks created and committed"
+                    )
+
                 except Exception as e:
-                    logger.error(f"Failed to normalize/segment source {src.source_ref}: {str(e)}")
+                    logger.error(
+                        f"Failed to process IngestionSource {unprocessed_source.id}: {str(e)}",
+                        exc_info=True
+                    )
+                    session.rollback()
+                    # Continue to next source rather than crashing
                     continue
 
-            session.commit()
-
-            logger.info(f"Ingestion complete: {global_block_count} blocks created across {len(sources)} sources")
-
-            # Step 4: Aggregate normalized source texts (plus user text) into canonical text
-            canonical_text, agg_metadata = TextAggregator.aggregate_with_metadata(
-                user_text,
-                normalized_sources
+            # Ingestion complete. Caller (runner.py) decides next status and phase.
+            logger.info(
+                f"Ingestion complete for job {job_id}: "
+                f"{sources_processed} sources processed, {blocks_created} blocks created"
             )
 
-            # Store canonical normalized text (one per job)
-            norm_config = TextNormalizer.get_normalization_config(**normalization_kwargs)
-            normalized = NormalizedText(
-                job_id=job_id,
-                canonical_text=canonical_text,
-                source_count=len(normalized_sources),
-                normalization_config=norm_config
-            )
-            session.add(normalized)
-            session.commit()
-
-            # Return summary
             return {
                 "job_id": job_id,
-                "user_text": user_text[:100] + "..." if len(user_text) > 100 else user_text,
-                "ingestion_sources": len(extracted_texts),
-                "canonical_text_length": len(canonical_text),
-                "text_blocks": global_block_count,
-                "segmentation_strategy": segmentation_strategy
+                "sources_processed": sources_processed,
+                "blocks_created": blocks_created
             }
 
     @staticmethod
-    def get_blocks_for_job(job_id: int) -> List[dict]:
+    def _segment_text(
+        text: str,
+        strategy: str = "sentences",
+        **kwargs
+    ) -> list:
         """
-        Retrieve all text blocks for a job.
+        Delegate to TextSegmenter based on strategy.
+        
+        Args:
+            text: normalized text
+            strategy: 'sentences', 'paragraphs', 'length', 'sections'
+            **kwargs: strategy-specific parameters
         
         Returns:
-            list of dicts with keys: id, block_text, block_order, block_type
+            list of text blocks
+        
+        Raises:
+            ValueError: if strategy not supported
+        """
+        if strategy == "sentences":
+            return TextSegmenter.segment_by_sentences(
+                text,
+                sentences_per_block=kwargs.get("sentences_per_block", 3)
+            )
+        elif strategy == "paragraphs":
+            return TextSegmenter.segment_by_paragraphs(
+                text,
+                min_para_length=kwargs.get("min_para_length", 50)
+            )
+        elif strategy == "length":
+            return TextSegmenter.segment_by_length(
+                text,
+                block_length=kwargs.get("block_length", 300),
+                overlap=kwargs.get("overlap", 50)
+            )
+        elif strategy == "sections":
+            return TextSegmenter.segment_by_sections(
+                text,
+                section_markers=kwargs.get("section_markers", None)
+            )
+        else:
+            raise ValueError(f"Unknown segmentation strategy: {strategy}")
+
+    @staticmethod
+    def get_blocks_for_job(job_id: int) -> list:
+        """
+        Retrieve all TextBlock rows for a job.
+        
+        Returns:
+            list of dicts with keys: id, block_text, block_order, block_type, source_id
         """
         with Session(engine) as session:
             blocks = session.query(TextBlock).filter(
                 TextBlock.job_id == job_id
             ).order_by(TextBlock.block_order).all()
-            
+
             return [
                 {
                     "id": b.id,
                     "block_text": b.block_text,
                     "block_order": b.block_order,
-                    "block_type": b.block_type
+                    "block_type": b.block_type,
+                    "ingestion_source_id": b.ingestion_source_id
                 }
                 for b in blocks
             ]
 
     @staticmethod
-    def get_canonical_text(job_id: int) -> Optional[str]:
-        """Retrieve canonical normalized text for a job."""
+    def get_job_status(job_id: int) -> Optional[str]:
+        """
+        Retrieve current job status.
+        
+        Returns:
+            status string or None if job not found
+        """
         with Session(engine) as session:
-            normalized = session.query(NormalizedText).filter(
-                NormalizedText.job_id == job_id
-            ).first()
-            
-            return normalized.canonical_text if normalized else None
+            job = session.query(Job).filter(Job.id == job_id).first()
+            return job.status if job else None
+

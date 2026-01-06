@@ -2,6 +2,10 @@
 Persistence helpers for Phase-4 hypotheses.
 
 Provides functions to persist hypothesis rows and query them for UI.
+
+Design: Single-active-state per job - only one set of hypotheses exists per job_id at any time.
+On each hypothesis generation run, all existing hypotheses for the job are deleted before
+new ones are inserted. This ensures no versioning is needed and storage overhead is minimal.
 """
 from datetime import datetime
 import logging
@@ -15,8 +19,36 @@ from app.storage.models import ReasoningQuery
 logger = logging.getLogger(__name__)
 
 
+def delete_all_hypotheses_for_job(job_id: int) -> int:
+    """
+    Delete all existing hypotheses for a job.
+    
+    Part of single-active-state model: called before persist_hypotheses
+    to ensure only one hypothesis set exists per job at any time.
+    
+    Args:
+        job_id: The job ID.
+    
+    Returns:
+        Number of hypotheses deleted.
+    """
+    with Session(engine) as session:
+        count = session.query(Hypothesis).filter(
+            Hypothesis.job_id == job_id
+        ).delete(synchronize_session=False)
+        session.commit()
+        
+        if count > 0:
+            logger.info(f"Deleted {count} existing hypotheses for job {job_id} (preparing for fresh generation)")
+        
+        return count
+
+
 def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[int] = None) -> int:
     """Persist a list of hypothesis dicts as rows.
+
+    Implements single-active-state model: assumes all old hypotheses for this job
+    have already been deleted. Inserts fresh hypotheses for this generation run.
 
     Each hypothesis dict is expected to contain keys:
     - source, target, path (list), predicates (list), explanation (str), confidence (int), mode (str)
@@ -47,7 +79,7 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
     return inserted
 
 
-def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejected: bool = False) -> List[Dict]:
+def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejected: bool = True) -> List[Dict]:
     """Fetch hypotheses for a job for UI listing.
 
     Returns a list of dicts.

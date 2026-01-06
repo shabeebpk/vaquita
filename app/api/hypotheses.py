@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from app.storage.db import engine
 from app.storage.models import Job
 from app.graphs.persistence import get_semantic_graph
-from app.path_reasoning.persistence import get_hypotheses, create_reasoning_query, persist_hypotheses
+from app.path_reasoning.persistence import (
+    get_hypotheses,
+    create_reasoning_query,
+    persist_hypotheses,
+    delete_all_hypotheses_for_job,
+)
 from app.path_reasoning.reasoning import run_path_reasoning
 from app.schemas.hypotheses import ExploreResponse, QueryRequest, QueryResponse, HypothesisOut
 
@@ -83,6 +88,10 @@ def post_query_hypotheses(job_id: int, req: QueryRequest):
     from app.path_reasoning.filtering import filter_hypotheses
     hyps = filter_hypotheses(hyps, semantic_graph)
 
+    # SINGLE-ACTIVE-STATE: Delete all existing hypotheses for this job before inserting fresh ones
+    # This maintains the principle that only one hypothesis set exists per job at any time
+    deleted_count = delete_all_hypotheses_for_job(job_id)
+    
     # Persist hypotheses with query_id (all of them, including rejected)
     persist_hypotheses(job_id=job_id, hypotheses=hyps, query_id=qid)
 

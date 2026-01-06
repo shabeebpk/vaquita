@@ -1,7 +1,7 @@
 """
-Worker: processes one job stage per queue event.
-Reads job status from DB, executes appropriate pipeline stage, updates status.
-No loops, no recursion, no ingestion logic here.
+Worker: orchestrates job pipeline stages.
+Polls job status from DB, invokes appropriate service, handles success/failure,
+updates status, and emits events. Orchestration logic only; services contain execution logic.
 """
 import logging
 from sqlalchemy.orm import Session
@@ -9,22 +9,36 @@ from sqlalchemy.orm import Session
 from app.core.queues import job_queue, get_event_queue
 from app.core.events import make_event
 from app.storage.db import engine
-from app.storage.models import Job
-from app.ingestion.files import save_file
+from app.storage.models import Job, IngestionSource, File
 from app.ingestion.service import IngestionService
+from app.ingestion.input_handler import InputHandler
 
 logger = logging.getLogger(__name__)
 
 
+def emit_event(event_queue, event_type: str, data) -> None:
+    """Emit an event to the job's event queue."""
+    try:
+        event = make_event(event_type, data)
+        event_queue.put(event)
+    except Exception as e:
+        logger.warning(f"Failed to emit event {event_type}: {e}")
+
+
 def process_job_stage(job_id: int) -> None:
     """
-    Process one stage of the job pipeline based on job.status in DB.
+    Orchestrate one stage of the job pipeline based on job.status in DB.
     
-    - CREATED → run ingestion
-    - INGESTED → ready for next stage (external/agent decision)
-    - NEED_MORE_INPUT → pause
-    - DONE → exit
+    This runner is the sole orchestrator: it decides when each service is invoked,
+    handles success/failure explicitly, updates job status, and transitions to
+    next phases. Services contain only execution logic, not orchestration.
+    
+    Status transitions:
+    - READY_TO_INGEST → call IngestionService.ingest_job() → INGESTED or FAILED
+    - INGESTED → call TripleExtractor → TRIPLES_EXTRACTED or FAILED
+    - ... (and so on for other phases)
     """
+    logger.info("running : {job.status}")
     with Session(engine) as session:
         job = session.query(Job).filter(Job.id == job_id).first()
         
@@ -35,39 +49,41 @@ def process_job_stage(job_id: int) -> None:
         eq = get_event_queue(job_id)
         logger.info(f"Processing job {job_id}, status: {job.status}")
         
-        # Status: CREATED → Run ingestion
-        if job.status == "CREATED":
+        # Status: READY_TO_INGEST → Run ingestion (pull IngestionSource rows and process)
+        if job.status == "READY_TO_INGEST":
             emit_event(eq, "status", f"Starting ingestion for job {job_id}")
+            logger.info(f"Job {job_id} is READY_TO_INGEST — invoking IngestionService")
             
             try:
-                # Get file paths from files table
-                files = session.query(File).filter(File.job_id == job_id).all()
-                file_paths = [(f.stored_path, f.file_type) for f in files]
-                
-                # Run ingestion service
+                # Ingestion service handles all unprocessed IngestionSource rows
                 result = IngestionService.ingest_job(
                     job_id=job_id,
-                    user_text=job.user_text,
-                    file_paths=file_paths,
                     segmentation_strategy="sentences",
                     segmentation_kwargs={"sentences_per_block": 3},
                     normalization_kwargs={}
                 )
                 
+                # Success: emit result and update status
                 emit_event(eq, "ingestion", result)
-                
-                # Update job status
                 job.status = "INGESTED"
                 session.commit()
                 
-                emit_event(eq, "status", f"Ingestion complete: {result['text_blocks']} blocks created")
-                logger.info(f"Job {job_id} ingestion complete")
+                emit_event(eq, "status", f"Ingestion complete: {result['blocks_created']} blocks created")
+                logger.info(f"Job {job_id} ingestion succeeded: {result}")
                 
-            except Exception as e:
+            except RuntimeError as e:
+                # Status mismatch or other orchestration error
                 emit_event(eq, "error", str(e))
                 job.status = "FAILED"
                 session.commit()
-                logger.error(f"Job {job_id} ingestion failed: {str(e)}")
+                logger.error(f"Job {job_id} ingestion failed (status mismatch): {str(e)}")
+                
+            except Exception as e:
+                # Ingestion execution error
+                emit_event(eq, "error", str(e))
+                job.status = "FAILED"
+                session.commit()
+                logger.error(f"Job {job_id} ingestion failed (execution error): {str(e)}", exc_info=True)
         
         # Status: INGESTED → Run triple extraction stage (minimal integration)
         elif job.status == "INGESTED":
@@ -90,32 +106,10 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Triple extraction failed for job {job_id}: {e}")
         
-        # Status: TRIPLES_EXTRACTED → Run evidence aggregation
+        # Status: TRIPLES_EXTRACTED → Run structural compression (Phase 2)
         elif job.status == "TRIPLES_EXTRACTED":
-            emit_event(eq, "status", "Starting evidence aggregation for job")
-            logger.info(f"Job {job_id} is TRIPLES_EXTRACTED — running evidence aggregation")
-            try:
-                # Import here to avoid circular imports at module load
-                from app.graphs.aggregator import aggregate_evidence_for_job
-
-                # Default threshold is 2; can be configured via env later
-                threshold = 2
-                result = aggregate_evidence_for_job(job_id, threshold=threshold)
-                emit_event(eq, "aggregation", result)
-
-                # Update job status to reflect aggregation is complete
-                job.status = "GRAPH_AGGREGATED"
-                session.commit()
-                emit_event(eq, "status", f"Evidence aggregation complete: {result.get('filtered_groups', 0)} groups above threshold")
-                logger.info(f"Job {job_id} evidence aggregated: {result}")
-            except Exception as e:
-                emit_event(eq, "error", str(e))
-                logger.error(f"Evidence aggregation failed for job {job_id}: {e}")
-        
-        # Status: GRAPH_AGGREGATED -> Run structural compression (Phase 2)
-        elif job.status == "GRAPH_AGGREGATED":
             emit_event(eq, "status", "Starting structural compression for job")
-            logger.info(f"Job {job_id} is GRAPH_AGGREGATED — running structural compression")
+            logger.info(f"Job {job_id} is TRIPLES_EXTRACTED — running structural compression")
             try:
                 # Import here to avoid circular imports at module load
                 from app.graphs.structural import project_structural_graph
@@ -136,7 +130,7 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "status", f"Structural compression complete: {proj.get('projected_groups', 0)} groups")
                 logger.info(f"Job {job_id} structural compression complete: {proj}")
 
-                job_queue.put(6)
+                job_queue.put(1)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Structural compression failed for job {job_id}: {e}")
@@ -265,7 +259,7 @@ def process_job_stage(job_id: int) -> None:
             try:
                 from app.graphs.persistence import get_semantic_graph
                 from app.path_reasoning import run_path_reasoning
-                from app.path_reasoning.persistence import persist_hypotheses
+                from app.path_reasoning.persistence import persist_hypotheses, delete_all_hypotheses_for_job
                 import os
 
                 persisted = get_semantic_graph(job_id)
@@ -306,6 +300,9 @@ def process_job_stage(job_id: int) -> None:
                 # Modifies hypotheses dicts in-place with passed_filter/filter_reason keys
                 hypotheses = filter_hypotheses(hypotheses, persisted)
 
+                # SINGLE-ACTIVE-STATE: Delete all existing hypotheses for this job before inserting fresh ones
+                deleted_count = delete_all_hypotheses_for_job(job_id)
+                
                 inserted = persist_hypotheses(job_id, hypotheses)
 
                 emit_event(eq, "path_reasoning", {"mode": reasoning_mode, "hypotheses_count": len(hypotheses), "inserted": inserted})
@@ -320,7 +317,7 @@ def process_job_stage(job_id: int) -> None:
                         passed += 1
 
                 logger.info(f"Job {job_id} path reasoning complete: {len(hypotheses)} hypotheses, {passed} passed filter, {inserted} persisted")
-                job_queue.put(6) #delete this
+                job_queue.put(1) #delete this
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Path reasoning failed for job {job_id}: {e}")
@@ -355,7 +352,6 @@ def process_job_stage(job_id: int) -> None:
                 job_metadata = {
                     "id": job.id,
                     "status": job.status,
-                    "user_text": job.user_text or "",
                     "created_at": job.created_at.isoformat() if job.created_at else None,
                 }
 
@@ -379,7 +375,7 @@ def process_job_stage(job_id: int) -> None:
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Decision & control failed for job {job_id}: {e}")
-        
+
         # Status: DECISION_MADE → Run decision handlers (Control Layer)
         elif job.status == "DECISION_MADE":
             emit_event(eq, "status", "Starting decision handler execution")
@@ -401,7 +397,6 @@ def process_job_stage(job_id: int) -> None:
                 job_metadata = {
                     "id": job.id,
                     "status": job.status,
-                    "user_text": job.user_text or "",
                     "created_at": job.created_at.isoformat() if job.created_at else None,
                 }
 
@@ -483,13 +478,14 @@ def start_worker() -> None:
     Main worker loop: blocking queue.get(), process one stage per job.
     """
     logger.info("Worker started")
+    job_queue.put(1)
     
     while True:
         job_id = job_queue.get()  # blocks until job available
         logger.info(f"Received job {job_id} from queue")
         
         try:
-            process_job_stage(job_id=6)
+            process_job_stage(job_id=1)
         except Exception as e:
             logger.error(f"Unexpected error processing job {job_id}: {str(e)}")
 
