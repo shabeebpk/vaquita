@@ -103,6 +103,7 @@ def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejec
         for r in rows:
             result.append({
                 "id": r.id,
+                "job_id": r.job_id,
                 "source": r.source,
                 "target": r.target,
                 "path": r.path,

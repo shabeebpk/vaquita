@@ -4,6 +4,7 @@ Polls job status from DB, invokes appropriate service, handles success/failure,
 updates status, and emits events. Orchestration logic only; services contain execution logic.
 """
 import logging
+import os
 from sqlalchemy.orm import Session
 
 from app.core.queues import job_queue, get_event_queue
@@ -15,6 +16,12 @@ from app.ingestion.input_handler import InputHandler
 
 logger = logging.getLogger(__name__)
 
+# Load configuration from environment
+_INGESTION_SEGMENTATION_STRATEGY = os.getenv("INGESTION_SEGMENTATION_STRATEGY", "sentences")
+_INGESTION_SENTENCES_PER_BLOCK = int(os.getenv("INGESTION_SENTENCES_PER_BLOCK", "3"))
+_SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.85"))
+_PATH_REASONING_MAX_HOPS = int(os.getenv("PATH_REASONING_MAX_HOPS", "2"))
+
 
 def emit_event(event_queue, event_type: str, data) -> None:
     """Emit an event to the job's event queue."""
@@ -23,6 +30,45 @@ def emit_event(event_queue, event_type: str, data) -> None:
         event_queue.put(event)
     except Exception as e:
         logger.warning(f"Failed to emit event {event_type}: {e}")
+
+
+def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
+    """
+    Verify that all fetched IngestionSource rows are ready for ingestion.
+    
+    STRICT TWO-PHASE MODEL:
+    - Phase 1 (FETCH_MORE_RUNNING): FetchService creates IngestionSource rows with processed=false
+    - Phase 2: This check verifies sources were created successfully
+    - Then: Transition to READY_TO_INGEST so next process_job_stage() calls IngestionService.ingest_job()
+    - Finally: IngestionService processes those sources as TextBlocks
+    
+    This ensures fetched abstracts follow the SAME lifecycle as PDFs and user text:
+    1. Create IngestionSource row (processed=false)
+    2. Wait for READY_TO_INGEST status
+    3. IngestionService processes it to TextBlocks
+    4. Continue with triple extraction, graph building, etc.
+    
+    Args:
+        job_id: Job ID to check
+        session: SQLAlchemy session
+    
+    Returns:
+        True if unprocessed sources exist (ready for ingestion), False otherwise
+    """
+    from app.storage.models import IngestionSource, IngestionSourceType
+    
+    # Count unprocessed sources for this job (created by fetch)
+    unprocessed_count = session.query(IngestionSource).filter(
+        IngestionSource.job_id == job_id,
+        IngestionSource.processed == False,
+        IngestionSource.source_type.in_([
+            IngestionSourceType.PAPER_ABSTRACT.value,
+            IngestionSourceType.API_TEXT.value
+        ])
+    ).count()
+    
+    logger.info(f"Job {job_id} fetch readiness check: {unprocessed_count} unprocessed fetched sources")
+    return unprocessed_count > 0
 
 
 def process_job_stage(job_id: int) -> None:
@@ -58,8 +104,8 @@ def process_job_stage(job_id: int) -> None:
                 # Ingestion service handles all unprocessed IngestionSource rows
                 result = IngestionService.ingest_job(
                     job_id=job_id,
-                    segmentation_strategy="sentences",
-                    segmentation_kwargs={"sentences_per_block": 3},
+                    segmentation_strategy=_INGESTION_SEGMENTATION_STRATEGY,
+                    segmentation_kwargs={"sentences_per_block": _INGESTION_SENTENCES_PER_BLOCK},
                     normalization_kwargs={}
                 )
                 
@@ -102,6 +148,8 @@ def process_job_stage(job_id: int) -> None:
                 session.commit()
                 emit_event(eq, "status", f"Triple extraction complete: {summary.get('triples_created', 0)} triples")
                 logger.info(f"Job {job_id} triples extracted: {summary}")
+
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Triple extraction failed for job {job_id}: {e}")
@@ -130,7 +178,7 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "status", f"Structural compression complete: {proj.get('projected_groups', 0)} groups")
                 logger.info(f"Job {job_id} structural compression complete: {proj}")
 
-                job_queue.put(1)
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Structural compression failed for job {job_id}: {e}")
@@ -162,7 +210,7 @@ def process_job_stage(job_id: int) -> None:
                 # Apply Phase 2.5 sanitization (read-only)
                 sanitized = sanitize_graph(structural_graph)
 
-                logger.info(f"\n\n{sanitized}\n\n")
+                # logger.info(f"\n\n{sanitized}\n\n")
                 # Optionally remove cached structural graph now that sanitization ran
                 try:
                     delete_structural_graph(job_id)
@@ -183,7 +231,7 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "status", f"Graph sanitization complete: {sanitized.get('summary', {}).get('total_nodes_after', 0)} nodes after cleanup")
                 logger.info(f"Job {job_id} graph sanitized: {sanitized['summary']}")
 
-                job_queue.put(6)
+                job_queue.put(1)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Graph sanitization failed for job {job_id}: {e}")
@@ -211,11 +259,11 @@ def process_job_stage(job_id: int) -> None:
                     return
 
                 # Apply Phase-3 semantic merging
-                # Use default similarity_threshold=0.85 (safe merging)
+                # Use similarity_threshold from env (default 0.85 = safe merging)
                 semantic_graph = merge_semantically(
                     cached,
                     embedding_provider_name="sentence-transformers",
-                    similarity_threshold=0.85,
+                    similarity_threshold=_SEMANTIC_SIMILARITY_THRESHOLD,
                 )
 
                 logger.info(f"\n\n\n(me): semantic graph: {semantic_graph}\n\n\n")
@@ -248,6 +296,8 @@ def process_job_stage(job_id: int) -> None:
                 # indicates Phase-3 completed and the semantic graph persisted.
                 # Transition into PATH_REASONING_RUNNING must be done explicitly
                 # (e.g. by UI/operator) to start Phase-4.
+
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Semantic merging failed for job {job_id}: {e}")
@@ -291,7 +341,7 @@ def process_job_stage(job_id: int) -> None:
                     persisted,
                     reasoning_mode=reasoning_mode,
                     seeds=seeds,
-                    max_hops=2,
+                    max_hops=_PATH_REASONING_MAX_HOPS,
                     allow_len3=allow_len3,
                     stoplist=stoplist,
                 )
@@ -316,8 +366,8 @@ def process_job_stage(job_id: int) -> None:
                     if o.get("passed_filter"):
                         passed += 1
 
-                logger.info(f"Job {job_id} path reasoning complete: {len(hypotheses)} hypotheses, {passed} passed filter, {inserted} persisted")
-                job_queue.put(1) #delete this
+                logger.info(f"\n\n\nJob {job_id} path reasoning complete: {len(hypotheses)} hypotheses, {passed} passed filter, {inserted} persisted")
+                job_queue.put(6) #delete this
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Path reasoning failed for job {job_id}: {e}")
@@ -372,18 +422,156 @@ def process_job_stage(job_id: int) -> None:
                 session.commit()
                 emit_event(eq, "status", f"Decision made: {decision_result['decision_label']}")
 
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Decision & control failed for job {job_id}: {e}")
 
-        # Status: DECISION_MADE → Run decision handlers (Control Layer)
+        # Status: DECISION_MADE → Evaluate signal proceed to handlers
         elif job.status == "DECISION_MADE":
+            emit_event(eq, "status", "Evaluating signal from last fetch (if any)")
+            logger.info(f"Job {job_id} is DECISION_MADE — evaluating signal")
+            
+            try:
+                from app.storage.models import SearchQueryRun, DecisionResult
+                from app.signals.evaluator import get_last_decision_before_run, get_current_decision_after_run, compute_measurement_delta
+                from app.signals.applier import classify_signal, apply_signal_result
+                
+                # Find the most recent SearchQueryRun for this job
+                most_recent_run = session.query(SearchQueryRun).filter(
+                    SearchQueryRun.job_id == job_id
+                ).order_by(SearchQueryRun.created_at.desc()).first()
+                
+                if most_recent_run and not most_recent_run.signal_delta:
+                    logger.info(f"Evaluating signal for SearchQueryRun {most_recent_run.id}")
+                    
+                    # Get decisions surrounding the run
+                    before_decision = get_last_decision_before_run(job_id, most_recent_run, session)
+                    after_decision = get_current_decision_after_run(job_id, most_recent_run, session)
+                    
+                    if before_decision and after_decision:
+                        # Compute delta
+                        delta = compute_measurement_delta(
+                            before_decision["measurements"],
+                            after_decision["measurements"]
+                        )
+                        logger.info(f"Signal delta: {delta:.3f}")
+                        
+                        # Classify signal
+                        signal_value, new_status = classify_signal(delta)
+                        
+                        # Apply result
+                        apply_signal_result(most_recent_run, signal_value, new_status, session)
+                        session.commit()
+                        
+                        emit_event(eq, "signal", {
+                            "delta": delta,
+                            "signal_value": signal_value,
+                            "status": new_status,
+                            "search_query_id": most_recent_run.search_query_id
+                        })
+                        
+                        logger.info(f"Signal applied: value={signal_value}, status={new_status}")
+                    else:
+                        logger.debug(f"Skipping signal evaluation: before={before_decision is not None}, after={after_decision is not None}")
+                else:
+                    logger.debug(f"No unprocessed SearchQueryRun found or already evaluated")
+                
+                # Now check decision outcome and route accordingly
+                decision_record = session.query(DecisionResult).filter(
+                    DecisionResult.job_id == job_id
+                ).order_by(DecisionResult.created_at.desc()).first()
+                
+                if not decision_record:
+                    logger.error(f"No decision result found for job {job_id}")
+                    return
+                
+                decision_label = decision_record.decision_label
+                logger.info(f"Decision outcome: {decision_label}")
+                
+                # Proceed to handlers for other processes
+                job.status = "RUNNING_HANDLERS"
+                session.commit()
+                    
+                job_queue.put(job_id)
+            except Exception as e:
+                emit_event(eq, "error", str(e))
+                logger.error(f"Signal evaluation or decision routing failed for job {job_id}: {e}", exc_info=True)
+
+        # Status: FETCH_MORE_RUNNING → Execute fetch pipeline (Phase 1: Create IngestionSources only)
+        elif job.status == "FETCH_MORE_RUNNING":
+            emit_event(eq, "status", "Starting FETCH_MORE literature pipeline")
+            logger.info(f"Job {job_id} is FETCH_MORE_RUNNING — executing fetch service")
+            try:
+                from app.graphs.persistence import get_semantic_graph
+                from app.path_reasoning.persistence import get_hypotheses
+                from app.fetching.service import FetchService
+                from app.llm.service import get_llm_service
+
+                # Load persisted artifacts
+                persisted_graph = get_semantic_graph(job_id)
+                if not persisted_graph:
+                    msg = f"Semantic graph for job {job_id} not found for FETCH_MORE"
+                    emit_event(eq, "error", msg)
+                    job.status = "FAILED"
+                    session.commit()
+                    logger.error(msg)
+                    return
+
+                hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0) or []
+                passed_hypotheses = [h for h in hypotheses if h.get("passed_filter", False)]
+
+                if not passed_hypotheses:
+                    logger.warning(f"No passed hypotheses for job {job_id}, cannot fetch")
+                    job.status = "DECISION_MADE"
+                    session.commit()
+                    return
+
+                # Execute FETCH_MORE (Phase 1: Creates IngestionSource rows only, never ingests)
+                llm_client = get_llm_service()
+                fetch_service = FetchService(llm_client=llm_client)
+                fetch_result = fetch_service.execute_fetch_more(
+                    job_id=job_id,
+                    hypotheses=passed_hypotheses,
+                    session=session
+                )
+
+                emit_event(eq, "fetch_result", fetch_result)
+                logger.info(f"FETCH_MORE completed: created {len(fetch_result['ingestion_sources'])} IngestionSource rows")
+
+                # Phase 2: Check if all fetched sources are ready, then transition to READY_TO_INGEST
+                if len(fetch_result["ingestion_sources"]) > 0:
+                    # Verify all sources for this fetch cycle have been created
+                    sources_ready = verify_fetch_sources_ready(job_id, session)
+                    if sources_ready:
+                        job.status = "READY_TO_INGEST"
+                        session.commit()
+                        emit_event(eq, "status", f"Fetched abstracts ready: {fetch_result['ingestion_sources']} IngestionSource rows created, job ready for ingestion")
+                        logger.info(f"Job {job_id} transitioned to READY_TO_INGEST after fetch (will process next cycle)")
+                        job_queue.put(job_id)
+                    else:
+                        logger.warning(f"Fetch sources not ready for job {job_id}, keeping in FETCH_MORE_RUNNING")
+                else:
+                    # No sources fetched; go back to decision phase
+                    job.status = "DECISION_MADE"
+                    session.commit()
+                    emit_event(eq, "status", "No sources fetched, returning to decision phase")
+                    logger.info(f"Job {job_id} returned to DECISION_MADE (no sources fetched)")
+            except Exception as e:
+                emit_event(eq, "error", str(e))
+                logger.error(f"FETCH_MORE pipeline failed for job {job_id}: {e}", exc_info=True)
+                job.status = "FAILED"
+                session.commit()
+
+        # Status: RUNNING_HANDLERS → Execute decision handlers
+        elif job.status == "RUNNING_HANDLERS":
             emit_event(eq, "status", "Starting decision handler execution")
-            logger.info(f"Job {job_id} is DECISION_MADE — running decision handlers")
+            logger.info(f"Job {job_id} is RUNNING_HANDLERS — running decision handlers")
             try:
                 from app.graphs.persistence import get_semantic_graph
                 from app.path_reasoning.persistence import get_hypotheses
                 from app.decision.handlers.controller import get_handler_controller
+                from app.storage.models import DecisionResult
 
                 # Load persisted artifacts for handler execution
                 persisted_graph = get_semantic_graph(job_id)
@@ -401,7 +589,6 @@ def process_job_stage(job_id: int) -> None:
                 }
 
                 # Load the decision result from DB for handler
-                from app.storage.models import DecisionResult
                 decision_record = session.query(DecisionResult).filter(
                     DecisionResult.job_id == job_id
                 ).order_by(DecisionResult.created_at.desc()).first()
@@ -449,6 +636,7 @@ def process_job_stage(job_id: int) -> None:
                 if handler_result.data:
                     emit_event(eq, "handler_data", handler_result.data)
 
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Handler execution failed for job {job_id}: {e}")
@@ -465,12 +653,6 @@ def process_job_stage(job_id: int) -> None:
         
         else:
             logger.warning(f"Job {job_id} has unknown status: {job.status}")
-
-
-def emit_event(event_queue, event_type: str, data) -> None:
-    """Helper: emit event to job's event queue."""
-    event = make_event(event_type, data)
-    event_queue.put(event)
 
 
 def start_worker() -> None:

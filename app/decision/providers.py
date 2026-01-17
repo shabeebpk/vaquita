@@ -57,11 +57,16 @@ class RuleBasedDecisionProvider(DecisionProvider):
         """
         Apply deterministic rules to select a decision.
         
-        Rules (in order):
+        Terminal decisions (checked in strict order):
         1. If total hypotheses < MIN_HYPOTHESES_THRESHOLD → INSUFFICIENT_SIGNAL
         2. If no passed hypotheses → INSUFFICIENT_SIGNAL
-        3. If dominant hypothesis is clear and max_norm_conf >= HIGH_CONFIDENCE_THRESHOLD → HALT_CONFIDENT
-        4. If unique_pairs < LOW_DIVERSITY_PAIRS_THRESHOLD → ASK_DOMAIN_EXPERT
+        3. HALT_CONFIDENT: no direct edge X→Y AND max_paths_per_pair >= PATH_SUPPORT_THRESHOLD 
+                           AND is_dominant_clear == true AND max_normalized_confidence >= HIGH_CONFIDENCE_THRESHOLD
+        4. HALT_NO_HYPOTHESIS: no direct edge AND evidence_growth_rate ≈ 0 for configured cycles
+                               AND max_paths_per_pair < PATH_SUPPORT_THRESHOLD AND graph stable
+        
+        Non-terminal decisions (if no terminal decision matched):
+        5. If unique_pairs < LOW_DIVERSITY_PAIRS_THRESHOLD → ASK_DOMAIN_EXPERT
         6. If graph_density < SPARSE_DENSITY_THRESHOLD → FETCH_MORE_LITERATURE
         7. Default → ASK_USER_INPUT
         """
@@ -81,23 +86,54 @@ class RuleBasedDecisionProvider(DecisionProvider):
             logger.info("No passed hypotheses: returning INSUFFICIENT_SIGNAL")
             return Decision.INSUFFICIENT_SIGNAL
         
+        # Extract measurements for decision logic
         max_norm_conf = measurements.get("max_normalized_confidence", 0.0)
-        mean_norm_conf = measurements.get("mean_normalized_confidence", 0.0)
         is_dominant = measurements.get("is_dominant_clear", False)
-        unique_pairs = measurements.get("unique_source_target_pairs", 0)
+        max_paths_per_pair = measurements.get("max_paths_per_pair", 0)
+        mean_path_length = measurements.get("mean_path_length", 1.0)
         graph_density = measurements.get("graph_density", 0.0)
         diversity_score = measurements.get("diversity_score", 0.0)
+        evidence_growth_rate = measurements.get("evidence_growth_rate", 0.0)
         
-        # Rule 3: High confidence + clear dominant
-        if is_dominant and max_norm_conf >= self.config.HIGH_CONFIDENCE_THRESHOLD:
+        # Determine if we have indirect paths (no direct edge): path length > 1
+        has_indirect_paths = mean_path_length > 1.0
+        
+        # Rule 3: HALT_CONFIDENT (strict conditions)
+        # Only when: no direct edge, sufficient path support, clear dominance, high confidence
+        if has_indirect_paths and \
+           max_paths_per_pair >= self.config.PATH_SUPPORT_THRESHOLD and \
+           is_dominant and \
+           max_norm_conf >= self.config.HIGH_CONFIDENCE_THRESHOLD:
             logger.info(
-                f"Dominant hypothesis with high normalized confidence "
-                f"(max={max_norm_conf:.2f} >= {self.config.HIGH_CONFIDENCE_THRESHOLD}): "
+                f"Halt confident: indirect paths={has_indirect_paths}, "
+                f"paths_per_pair={max_paths_per_pair} >= {self.config.PATH_SUPPORT_THRESHOLD}, "
+                f"dominant={is_dominant}, confidence={max_norm_conf:.2f} >= {self.config.HIGH_CONFIDENCE_THRESHOLD}: "
                 f"returning HALT_CONFIDENT"
             )
             return Decision.HALT_CONFIDENT
         
-        # Rule 4: Low diversity (check both unique pairs and diversity ratio)
+        # Rule 4: HALT_NO_HYPOTHESIS (evidence of stability, not growth)
+        # When: no direct edge, weak path support, stable evidence_growth
+        # Use graph density and diversity as stability indicators
+        is_stable = graph_density > 0.0 and diversity_score > 0.0
+        growth_is_minimal = evidence_growth_rate <= 0.0 or abs(evidence_growth_rate) < 0.1
+        
+        if has_indirect_paths and \
+           growth_is_minimal and \
+           max_paths_per_pair < self.config.PATH_SUPPORT_THRESHOLD and \
+           is_stable:
+            logger.info(
+                f"Halt no hypothesis: indirect paths={has_indirect_paths}, "
+                f"growth_rate={evidence_growth_rate:.2f} ≈ 0, "
+                f"paths_per_pair={max_paths_per_pair} < {self.config.PATH_SUPPORT_THRESHOLD}, "
+                f"stable=(density={graph_density:.4f}, diversity={diversity_score:.2f}): "
+                f"returning HALT_NO_HYPOTHESIS"
+            )
+            return Decision.HALT_NO_HYPOTHESIS
+        
+        # Non-terminal decisions (proceed with normal flow)
+        # Rule 5: Low diversity (check both unique pairs and diversity ratio)
+        unique_pairs = measurements.get("unique_source_target_pairs", 0)
         if unique_pairs < self.config.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD or \
            diversity_score < self.config.DIVERSITY_RATIO_THRESHOLD:
             logger.info(
@@ -106,7 +142,7 @@ class RuleBasedDecisionProvider(DecisionProvider):
             )
             return Decision.ASK_DOMAIN_EXPERT
         
-        # Rule 5: Sparse hypothesis graph
+        # Rule 6: Sparse hypothesis graph
         if graph_density < self.config.SPARSE_GRAPH_DENSITY_THRESHOLD:
             logger.info(
                 f"Sparse graph (density={graph_density:.4f} < {self.config.SPARSE_GRAPH_DENSITY_THRESHOLD}): "
@@ -168,7 +204,10 @@ class LLMDecisionProvider(DecisionProvider):
                 diversity_score=measurements.get('diversity_score', 0.0),
                 graph_density=measurements.get('graph_density', 0.0),
                 is_dominant_clear=measurements.get('is_dominant_clear', False),
-                unique_source_target_pairs=measurements.get('unique_source_target_pairs', 0)
+                unique_source_target_pairs=measurements.get('unique_source_target_pairs', 0),
+                max_paths_per_pair=measurements.get('max_paths_per_pair', 0),
+                evidence_growth_rate=measurements.get('evidence_growth_rate', 0.0),
+                mean_path_length=measurements.get('mean_path_length', 1.0)
             )
         except Exception as e:
             logger.error(f"Failed to format decision prompt: {e}")

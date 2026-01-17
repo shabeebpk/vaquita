@@ -63,6 +63,7 @@ class DecisionController:
         semantic_graph: Dict[str, Any],
         hypotheses: list,
         job_metadata: Dict[str, Any],
+        previous_decision_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Make a decision for a job based on its artifacts.
@@ -72,6 +73,7 @@ class DecisionController:
             semantic_graph: Phase-3 semantic graph dict.
             hypotheses: List of persisted hypothesis dicts.
             job_metadata: Job context (id, status, user_text, etc.).
+            previous_decision_result: Optional previous DecisionResult dict for temporal measurements.
         
         Returns:
             A decision result dict with keys:
@@ -81,8 +83,18 @@ class DecisionController:
             - fallback_used (bool)
             - fallback_reason (str or None)
         """
-        # Compute measurements
-        measurements = compute_measurements(semantic_graph, hypotheses, job_metadata)
+        # Compute measurements (optionally with indirect path metrics)
+        # Pass previous snapshot for temporal placeholders (growth_rate, stability, etc.)
+        previous_snapshot = (
+            previous_decision_result.get("measurements_snapshot")
+            if previous_decision_result else None
+        )
+        measurements = compute_measurements(
+            semantic_graph,
+            hypotheses,
+            job_metadata,
+            previous_measurement_snapshot=previous_snapshot,
+        )
         logger.info(f"Computed measurements for job {job_id}: {len(measurements)} signals")
         
         # Invoke primary provider

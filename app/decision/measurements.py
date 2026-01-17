@@ -6,11 +6,16 @@ with no decision logic—only data aggregation.
 
 Key design: separates hypothesis populations (total, passed, rejected)
 and applies statistics only to passed hypotheses.
+
+Indirect path measurements are optionally extended via app/decision/indirect_path_measurements/
+submodule for additional structural metrics (paths_per_pair, redundancy_score, etc.).
 """
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 
 from app.decision.config import get_decision_config
+from app.decision.indirect_path_measurements.config import IndirectPathConfig
+from app.decision.indirect_path_measurements.integration import extend_measurements_with_indirect_paths
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +24,19 @@ def compute_measurements(
     semantic_graph: Dict[str, Any],
     hypotheses: List[Dict[str, Any]],
     job_metadata: Dict[str, Any],
+    previous_measurement_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Compute a dictionary of deterministic signals from artifacts.
     
     Separates hypothesis populations and applies statistics only to passed hypotheses.
+    Optionally extends measurements with indirect-path metrics if enabled via .env.
     
     Args:
         semantic_graph: Phase-3 semantic graph dict (nodes, edges).
         hypotheses: List of persisted hypothesis dicts (all explore + query results).
         job_metadata: Job context (id, status, user_text, created_at, etc.).
+        previous_measurement_snapshot: Optional previous DecisionResult.measurements_snapshot for temporal measurements.
     
     Returns:
         A measurements dict with keys:
@@ -52,8 +60,20 @@ def compute_measurements(
         - graph_density: edges / max_possible_edges
         - semantic_graph_node_count, semantic_graph_edge_count
         - job_* metadata
+        
+        (If INDIRECT_PATH_MEASUREMENTS_ENABLED=true, also includes)
+        - max_paths_per_pair, mean_paths_per_pair, dominant_pair_path_ratio
+        - unique_intermediate_nodes_dominant, redundancy_score
+        - mean_path_length, path_length_variance
+        - pair_distribution_entropy
+        - evidence_growth_rate, hypothesis_stability, time_since_last_update (temporal placeholders)
+        - (and more, see app/decision/measurements/indirect_paths.py)
     """
     measurements = {}
+    
+    # ===== Initialize indirect path config =====
+    # Load config from environment on first call
+    IndirectPathConfig.load_from_env()
     
     # ===== Split hypothesis populations =====
     total_hypotheses = hypotheses  # all rows
@@ -164,5 +184,14 @@ def compute_measurements(
     measurements["job_id"] = job_metadata.get("id")
     measurements["job_status"] = job_metadata.get("status")
     measurements["job_user_text_length"] = len(job_metadata.get("user_text", ""))
+    
+    # ===== Extend with indirect path measurements (optional, configured via .env) =====
+    # If INDIRECT_PATH_MEASUREMENTS_ENABLED=true, compute additional structural metrics
+    # from hypotheses. These are read-only for now and do not influence decision logic.
+    measurements = extend_measurements_with_indirect_paths(
+        measurements,
+        hypotheses,
+        previous_snapshot=previous_measurement_snapshot,
+    )
     
     return measurements

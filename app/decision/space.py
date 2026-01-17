@@ -19,6 +19,9 @@ class Decision(Enum):
     # Confident outcome: sufficient signal to proceed
     HALT_CONFIDENT = "halt_confident"
     
+    # No hypothesis path: no evidence of indirect path growth or support
+    HALT_NO_HYPOTHESIS = "halt_no_hypothesis"
+    
     # Need external input
     ASK_DOMAIN_EXPERT = "ask_domain_expert"
     ASK_USER_INPUT = "ask_user_input"

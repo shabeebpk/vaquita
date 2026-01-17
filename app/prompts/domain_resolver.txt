@@ -1,0 +1,10 @@
+Classify the following scientific hypothesis into ONE domain.
+
+Hypothesis:
+- Source: {source}
+- Target: {target}
+- Explanation: {explanation}
+
+Domains: {domains}
+
+Respond with ONLY the domain name, nothing else.

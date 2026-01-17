@@ -65,6 +65,23 @@ class DecisionConfig:
             description="If graph_density < this, graph is sparse"
         )
         
+        # ===== Path Support Threshold =====
+        # For HALT_CONFIDENT: max_paths_per_pair >= this value
+        # For HALT_NO_HYPOTHESIS: max_paths_per_pair < this value
+        self.PATH_SUPPORT_THRESHOLD = self._get_int_env(
+            "DECISION_PATH_SUPPORT_THRESHOLD",
+            default=2,
+            description="Min paths per pair for sufficient path support"
+        )
+        
+        # ===== Stability Cycle Threshold =====
+        # For HALT_NO_HYPOTHESIS: evidence_growth_rate ≈ 0 for this many consecutive cycles
+        self.STABILITY_CYCLE_THRESHOLD = self._get_int_env(
+            "DECISION_STABILITY_CYCLE_THRESHOLD",
+            default=3,
+            description="Number of consecutive cycles with ~0 growth to declare stability"
+        )
+        
         # ===== Filtering Thresholds =====
         # If very few hypotheses passed filter vs total, may indicate problem
         self.PASSED_TO_TOTAL_RATIO_THRESHOLD = self._get_float_env(

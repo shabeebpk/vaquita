@@ -103,6 +103,8 @@ class Paper(Base):
     independent of whether they are downloaded or already extracted.
     A Paper may exist without a corresponding File (e.g., abstract-only entries).
     
+    Extended to support FETCH_MORE pipeline with deduplication and signal tracking.
+    
     Future extensibility:
     - Add embeddings_vector for semantic search
     - Add citation_count, h_index for relevance metrics
@@ -118,8 +120,11 @@ class Paper(Base):
     year = Column(Integer, nullable=True)
     venue = Column(String, nullable=True)  # Conference, journal, etc.
     doi = Column(String, nullable=True, unique=True, index=True)
+    external_ids = Column(JSON, nullable=True)  # e.g., {'arxiv_id': '2301.12345', 'pubmed_id': '12345678'}
+    fingerprint = Column(String, nullable=True, index=True)  # Content-based hash for deduplication
     source = Column(String, nullable=False)  # 'arxiv', 'crossref', 'pubmed', etc.
     pdf_url = Column(String, nullable=True)
+    used_for_research = Column(Boolean, default=False, nullable=False)  # Set only after signal evaluation
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -366,3 +371,85 @@ class DecisionResult(Base):
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, nullable=True)
+
+# ============================================================================
+# FETCH_MORE Literature Pipeline
+# ============================================================================
+
+class SearchQuery(Base):
+    """
+    First-class entity representing a search intent, not execution.
+    
+    Responsibility: Capture what the system is attempting to validate or strengthen,
+    with stable identifiers (hypothesis_signature), domain hints, status tracking,
+    and reputation scores. Never stores fetched results directly; only describes
+    the query intent.
+    
+    hypothesis_signature: Stable hash derived from hypothesis endpoints (source and target
+    node labels), never referencing hypothesis row IDs. Allows query reuse across runs.
+    
+    status: one of 'new', 'reusable', 'exhausted', 'blocked'. Evolved only via
+    signal computation based on measurable changes to decision measurements.
+    
+    reputation_score: Numeric value updated only via signal computation, never directly
+    by fetch results. Reflects past utility of this query.
+    
+    config_snapshot: JSONB copy of configuration used when query was created or last
+    reused. Immutable for audit trail.
+    
+    Future extensibility:
+    - Add query_type to distinguish between initial, expansion, or reuse attempts
+    - Add historical reputation tracking for trend analysis
+    - Add domain_confidence to track resolution certainty
+    """
+    __tablename__ = "search_queries"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    hypothesis_signature = Column(String, nullable=False, index=True)  # Stable hash of endpoints
+    query_text = Column(Text, nullable=False)  # Human-readable or derived query
+    resolved_domain = Column(String, nullable=True, index=True)  # e.g., 'biomedical', 'computer_science'
+    status = Column(String, nullable=False)  # 'new', 'reusable', 'exhausted', 'blocked'
+    reputation_score = Column(Integer, default=0, nullable=False)  # Updated only via signal
+    config_snapshot = Column(JSONB, nullable=False)  # Config at query creation/reuse time
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class SearchQueryRun(Base):
+    """
+    Append-only log of each execution attempt of a SearchQuery.
+    
+    Responsibility: Track the complete execution history of a SearchQuery without
+    mutation. Each row represents one attempt: which provider was used, why the query
+    was run (initial, reuse, or expansion), how many candidates were fetched,
+    how many passed deduplication, how many were rejected, and the later-computed
+    signal delta.
+    
+    This table is the ONLY mechanism by which the system can know whether a change
+    in graph or hypotheses originated from a fetch operation.
+    
+    reason: one of 'initial_attempt', 'reuse', 'expansion'. Explains query strategy.
+    signal_delta: Computed later during signal evaluation phase. Positive = strengthened,
+    zero = exhausted, negative = blocked.
+    
+    Future extensibility:
+    - Add fetch_duration for performance tracking
+    - Add fetch_error for explicit failure logging
+    - Add pages_fetched to track pagination depth
+    - Add cost_metadata for API usage tracking
+    """
+    __tablename__ = "search_query_runs"
+
+    id = Column(Integer, primary_key=True)
+    search_query_id = Column(Integer, ForeignKey("search_queries.id"), nullable=False, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    provider_used = Column(String, nullable=False)  # e.g., 'arxiv', 'crossref', 'pubmed'
+    reason = Column(String, nullable=False)  # 'initial_attempt', 'reuse', 'expansion'
+    candidates_fetched = Column(Integer, nullable=False)  # Total API results
+    candidates_accepted = Column(Integer, nullable=False)  # After deduplication filtering
+    candidates_rejected = Column(Integer, nullable=False)  # Rejected due to duplicate or other rules
+    signal_delta = Column(Integer, nullable=True)  # Computed during signal evaluation: >0, 0, or <0
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
