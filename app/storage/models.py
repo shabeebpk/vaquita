@@ -124,7 +124,6 @@ class Paper(Base):
     fingerprint = Column(String, nullable=True, index=True)  # Content-based hash for deduplication
     source = Column(String, nullable=False)  # 'arxiv', 'crossref', 'pubmed', etc.
     pdf_url = Column(String, nullable=True)
-    used_for_research = Column(Boolean, default=False, nullable=False)  # Set only after signal evaluation
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -447,9 +446,9 @@ class SearchQueryRun(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
     provider_used = Column(String, nullable=False)  # e.g., 'arxiv', 'crossref', 'pubmed'
     reason = Column(String, nullable=False)  # 'initial_attempt', 'reuse', 'expansion'
-    candidates_fetched = Column(Integer, nullable=False)  # Total API results
-    candidates_accepted = Column(Integer, nullable=False)  # After deduplication filtering
-    candidates_rejected = Column(Integer, nullable=False)  # Rejected due to duplicate or other rules
+    fetched_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs fetched (raw results)
+    accepted_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs accepted
+    rejected_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs rejected
     signal_delta = Column(Integer, nullable=True)  # Computed during signal evaluation: >0, 0, or <0
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

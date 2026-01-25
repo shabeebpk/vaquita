@@ -129,6 +129,62 @@ def get_current_decision_after_run(
     return None
 
 
+def find_pending_run_for_evaluation(
+    job_id: int,
+    current_decision: Dict[str, Any],
+    session: Session
+) -> Optional[SearchQueryRun]:
+    """
+    Find the pending SearchQueryRun that occurred between the previous decision
+    and the current decision.
+    
+    Strict Timing Rule:
+    previous_decision.created_at < run.created_at < current_decision.created_at
+    
+    Attribution Rule:
+    Only returns a run if it has NOT yet had a signal applied (signal_delta is None).
+    
+    Args:
+        job_id: Job ID
+        current_decision: Dict with current decision info
+        session: SQLAlchemy session
+        
+    Returns:
+        SearchQueryRun instance or None
+    """
+    # 1. Find previous decision
+    previous_decision = session.query(DecisionResult).filter(
+        DecisionResult.job_id == job_id,
+        DecisionResult.created_at < current_decision['created_at']
+    ).order_by(DecisionResult.created_at.desc()).first()
+    
+    if not previous_decision:
+        logger.info("No previous decision found; cannot establish time window for signal attribution.")
+        return None
+    
+    # 2. Find SearchQueryRun in the time window with no signal applied
+    pending_runs = session.query(SearchQueryRun).filter(
+        SearchQueryRun.job_id == job_id,
+        SearchQueryRun.created_at > previous_decision.created_at,
+        SearchQueryRun.created_at < current_decision['created_at'],
+        SearchQueryRun.signal_delta.is_(None)
+    ).order_by(SearchQueryRun.created_at.desc()).all()
+    
+    if not pending_runs:
+        logger.info(
+            f"No pending SearchQueryRun found between {previous_decision.created_at} "
+            f"and {current_decision['created_at']}"
+        )
+        return None
+        
+    if len(pending_runs) > 1:
+        logger.warning(
+            f"Found {len(pending_runs)} pending runs in window. Attributing to the most recent one."
+        )
+        
+    return pending_runs[0]
+
+
 def compute_measurement_delta(
     previous_measurements: Dict[str, Any],
     current_measurements: Dict[str, Any],

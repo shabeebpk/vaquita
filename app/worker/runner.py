@@ -37,7 +37,7 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
     Verify that all fetched IngestionSource rows are ready for ingestion.
     
     STRICT TWO-PHASE MODEL:
-    - Phase 1 (FETCH_MORE_RUNNING): FetchService creates IngestionSource rows with processed=false
+    - Phase 1 (FETCH_QUEUED): FetchService creates IngestionSource rows with processed=false
     - Phase 2: This check verifies sources were created successfully
     - Then: Transition to READY_TO_INGEST so next process_job_stage() calls IngestionService.ingest_job()
     - Finally: IngestionService processes those sources as TextBlocks
@@ -117,6 +117,7 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "status", f"Ingestion complete: {result['blocks_created']} blocks created")
                 logger.info(f"Job {job_id} ingestion succeeded: {result}")
                 
+                job_queue.put(job_id)
             except RuntimeError as e:
                 # Status mismatch or other orchestration error
                 emit_event(eq, "error", str(e))
@@ -176,7 +177,6 @@ def process_job_stage(job_id: int) -> None:
                 job.status = "STRUCTURAL_GRAPH_BUILT"
                 session.commit()
                 emit_event(eq, "status", f"Structural compression complete: {proj.get('projected_groups', 0)} groups")
-                logger.info(f"Job {job_id} structural compression complete: {proj}")
 
                 job_queue.put(job_id)
             except Exception as e:
@@ -231,7 +231,7 @@ def process_job_stage(job_id: int) -> None:
                 emit_event(eq, "status", f"Graph sanitization complete: {sanitized.get('summary', {}).get('total_nodes_after', 0)} nodes after cleanup")
                 logger.info(f"Job {job_id} graph sanitized: {sanitized['summary']}")
 
-                job_queue.put(1)
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Graph sanitization failed for job {job_id}: {e}")
@@ -265,8 +265,6 @@ def process_job_stage(job_id: int) -> None:
                     embedding_provider_name="sentence-transformers",
                     similarity_threshold=_SEMANTIC_SIMILARITY_THRESHOLD,
                 )
-
-                logger.info(f"\n\n\n(me): semantic graph: {semantic_graph}\n\n\n")
 
                 emit_event(eq, "semantic", semantic_graph)
 
@@ -434,50 +432,14 @@ def process_job_stage(job_id: int) -> None:
             
             try:
                 from app.storage.models import SearchQueryRun, DecisionResult
-                from app.signals.evaluator import get_last_decision_before_run, get_current_decision_after_run, compute_measurement_delta
+                from app.signals.evaluator import (
+                    find_pending_run_for_evaluation, 
+                    get_last_decision_before_run, 
+                    compute_measurement_delta
+                )
                 from app.signals.applier import classify_signal, apply_signal_result
                 
-                # Find the most recent SearchQueryRun for this job
-                most_recent_run = session.query(SearchQueryRun).filter(
-                    SearchQueryRun.job_id == job_id
-                ).order_by(SearchQueryRun.created_at.desc()).first()
-                
-                if most_recent_run and not most_recent_run.signal_delta:
-                    logger.info(f"Evaluating signal for SearchQueryRun {most_recent_run.id}")
-                    
-                    # Get decisions surrounding the run
-                    before_decision = get_last_decision_before_run(job_id, most_recent_run, session)
-                    after_decision = get_current_decision_after_run(job_id, most_recent_run, session)
-                    
-                    if before_decision and after_decision:
-                        # Compute delta
-                        delta = compute_measurement_delta(
-                            before_decision["measurements"],
-                            after_decision["measurements"]
-                        )
-                        logger.info(f"Signal delta: {delta:.3f}")
-                        
-                        # Classify signal
-                        signal_value, new_status = classify_signal(delta)
-                        
-                        # Apply result
-                        apply_signal_result(most_recent_run, signal_value, new_status, session)
-                        session.commit()
-                        
-                        emit_event(eq, "signal", {
-                            "delta": delta,
-                            "signal_value": signal_value,
-                            "status": new_status,
-                            "search_query_id": most_recent_run.search_query_id
-                        })
-                        
-                        logger.info(f"Signal applied: value={signal_value}, status={new_status}")
-                    else:
-                        logger.debug(f"Skipping signal evaluation: before={before_decision is not None}, after={after_decision is not None}")
-                else:
-                    logger.debug(f"No unprocessed SearchQueryRun found or already evaluated")
-                
-                # Now check decision outcome and route accordingly
+                # 1. Retrieve the Current Decision (the one that just occurred)
                 decision_record = session.query(DecisionResult).filter(
                     DecisionResult.job_id == job_id
                 ).order_by(DecisionResult.created_at.desc()).first()
@@ -485,23 +447,72 @@ def process_job_stage(job_id: int) -> None:
                 if not decision_record:
                     logger.error(f"No decision result found for job {job_id}")
                     return
+
+                # Create snapshot dict for the evaluator
+                current_decision_snapshot = {
+                    "job_id": job_id,
+                    "created_at": decision_record.created_at,
+                    "measurements": decision_record.measurements_snapshot
+                }
+
+                # 2. Find pending SearchQueryRun strictly between previous decision and this one
+                pending_run = find_pending_run_for_evaluation(
+                    job_id=job_id,
+                    current_decision=current_decision_snapshot,
+                    session=session
+                )
                 
+                if pending_run:
+                    logger.info(f"Refactoring Signal: Found pending SearchQueryRun {pending_run.id}")
+                    
+                    # 3. Get the decision strictly BEFORE this run
+                    before_decision = get_last_decision_before_run(job_id, pending_run, session)
+                    
+                    if before_decision:
+                        # 4. Compute Delta (Current - Previous)
+                        delta = compute_measurement_delta(
+                            before_decision["measurements"],
+                            current_decision_snapshot["measurements"]
+                        )
+                        logger.info(f"Signal delta: {delta:.3f}")
+                        
+                        # 5. Classify
+                        signal_value, new_status = classify_signal(delta)
+                        
+                        # 6. Apply Signal (Attribution)
+                        apply_signal_result(pending_run, signal_value, new_status, session)
+                        session.commit()
+                        
+                        emit_event(eq, "signal", {
+                            "delta": delta,
+                            "signal_value": signal_value,
+                            "status": new_status,
+                            "search_query_id": pending_run.search_query_id
+                        })
+                        
+                        logger.info(f"Signal applied to Run {pending_run.id}: value={signal_value}, status={new_status}")
+                    else:
+                        logger.warning(f"Could not find decision before SearchQueryRun {pending_run.id}; skipping signal.")
+                else:
+                    logger.debug("No pending SearchQueryRun found in strict timing window (Signal skipped).")
+                
+                # Proceed to handlers for other processes
                 decision_label = decision_record.decision_label
                 logger.info(f"Decision outcome: {decision_label}")
                 
-                # Proceed to handlers for other processes
                 job.status = "RUNNING_HANDLERS"
                 session.commit()
                     
                 job_queue.put(job_id)
+
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Signal evaluation or decision routing failed for job {job_id}: {e}", exc_info=True)
 
-        # Status: FETCH_MORE_RUNNING → Execute fetch pipeline (Phase 1: Create IngestionSources only)
-        elif job.status == "FETCH_MORE_RUNNING":
+        # Status: FETCH_QUEUED → Execute fetch pipeline (Phase 1: Create IngestionSources only)
+        elif job.status == "FETCH_QUEUED":
             emit_event(eq, "status", "Starting FETCH_MORE literature pipeline")
-            logger.info(f"Job {job_id} is FETCH_MORE_RUNNING — executing fetch service")
+            logger.info(f"Job {job_id} is FETCH_QUEUED — executing fetch service")
             try:
                 from app.graphs.persistence import get_semantic_graph
                 from app.path_reasoning.persistence import get_hypotheses
@@ -523,7 +534,7 @@ def process_job_stage(job_id: int) -> None:
 
                 if not passed_hypotheses:
                     logger.warning(f"No passed hypotheses for job {job_id}, cannot fetch")
-                    job.status = "DECISION_MADE"
+                    job.status = "GRAPH_SEMANTIC_MERGED"
                     session.commit()
                     return
 
@@ -550,7 +561,7 @@ def process_job_stage(job_id: int) -> None:
                         logger.info(f"Job {job_id} transitioned to READY_TO_INGEST after fetch (will process next cycle)")
                         job_queue.put(job_id)
                     else:
-                        logger.warning(f"Fetch sources not ready for job {job_id}, keeping in FETCH_MORE_RUNNING")
+                        logger.warning(f"Fetch sources not ready for job {job_id}, keeping in FETCH_QUEUED")
                 else:
                     # No sources fetched; go back to decision phase
                     job.status = "DECISION_MADE"

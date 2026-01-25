@@ -209,6 +209,8 @@ Respond with ONLY the domain name, nothing else."""
     prompt = template.format(source=source, target=target, explanation=explanation, domains=domains_str)
     
     try:
+
+        logger.info(f"llm client, {llm_client} , { 'yes' if 'call' in dir(llm_client) else dir(llm_client) }")
         # Call LLM
         response = llm_client.invoke(prompt)
         

@@ -6,10 +6,10 @@ Never triggers control flow; only updates query learning metadata.
 """
 import logging
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.storage.models import SearchQueryRun, SearchQuery, Paper
+from app.storage.models import SearchQueryRun, SearchQuery
 from app.signals.evaluator import SignalConfig
 
 logger = logging.getLogger(__name__)
@@ -84,41 +84,48 @@ def apply_signal_result(
     
     search_query.status = new_status
     
+    search_query.status = new_status
+    
+    # ---------------------------------------------------------
+    # SIGNAL ATTRIBUTION
+    # ---------------------------------------------------------
+    # If positive signal:
+    #   fetched_paper_ids -> accepted_paper_ids
+    #   rejected_paper_ids = []
+    # If zero or negative signal:
+    #   fetched_paper_ids -> rejected_paper_ids
+    #   accepted_paper_ids = []
+    
+    # We must explicitly cast list to ensure it's JSON-serializable if it wasn't already
+    fetched_ids = list(search_query_run.fetched_paper_ids or [])
+    
     if signal_delta > 0:
+        search_query_run.accepted_paper_ids = fetched_ids
+        search_query_run.rejected_paper_ids = []
+        
         search_query.reputation_score += config.reputation_on_positive
         logger.info(
             f"SearchQuery {search_query.id}: reputation {old_reputation} → "
             f"{search_query.reputation_score} (positive signal)"
         )
-    elif signal_delta < 0:
-        search_query.reputation_score += config.reputation_on_negative
-        logger.info(
-            f"SearchQuery {search_query.id}: reputation {old_reputation} → "
-            f"{search_query.reputation_score} (negative signal)"
-        )
+        logger.info(f"Run {search_query_run.id}: Attributed {len(fetched_ids)} papers to ACCEPTED.")
+        
+    else:  # Zero or Negative
+        search_query_run.accepted_paper_ids = []
+        search_query_run.rejected_paper_ids = fetched_ids
+        
+        if signal_delta < 0:
+            search_query.reputation_score += config.reputation_on_negative
+            logger.info(
+                f"SearchQuery {search_query.id}: reputation {old_reputation} → "
+                f"{search_query.reputation_score} (negative signal)"
+            )
+        else:
+            logger.info(f"SearchQuery {search_query.id}: reputation unchanged (zero signal)")
+            
+        logger.info(f"Run {search_query_run.id}: Attributed {len(fetched_ids)} papers to REJECTED.")
     
     search_query.updated_at = datetime.utcnow()
-    
-    # If positive signal, mark papers as used_for_research
-    if signal_delta > 0:
-        papers = session.query(Paper).filter(
-            Paper.source.in_([
-                search_query_run.provider_used
-            ]),
-            Paper.created_at >= search_query_run.created_at - timedelta(seconds=60),
-            Paper.created_at <= search_query_run.created_at + timedelta(seconds=60)
-        ).all()
-        
-        marked_count = 0
-        for paper in papers:
-            if not paper.used_for_research:
-                paper.used_for_research = True
-                marked_count += 1
-        
-        logger.info(
-            f"Marked {marked_count} papers as used_for_research "
-            f"for positive signal on SearchQueryRun {search_query_run.id}"
-        )
     
     logger.info(
         f"Applied signal result to SearchQuery {search_query.id}: "

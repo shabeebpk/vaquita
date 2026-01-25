@@ -9,7 +9,7 @@ import hashlib
 import logging
 import json
 import os
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -41,7 +41,7 @@ class QueryOrchestratorConfig:
         )
 
 
-def compute_hypothesis_signature(hypothesis: Dict[str, Any]) -> str:
+def compute_hypothesis_signature(hypothesis: Dict[str, Any], config: Optional[QueryOrchestratorConfig] = None) -> str:
     """
     Compute stable hash from hypothesis endpoints (source and target).
     Never references hypothesis row IDs.
@@ -60,7 +60,8 @@ def compute_hypothesis_signature(hypothesis: Dict[str, Any]) -> str:
     hash_obj = hashlib.sha256(combined.encode("utf-8"))
     signature = hash_obj.hexdigest()
     
-    config = QueryOrchestratorConfig()
+    if config is None:
+        config = QueryOrchestratorConfig()
     return signature[:config.signature_length]
 
 
@@ -89,7 +90,7 @@ def get_or_create_search_query(
     if config is None:
         config = QueryOrchestratorConfig()
     
-    hypothesis_signature = compute_hypothesis_signature(hypothesis)
+    hypothesis_signature = compute_hypothesis_signature(hypothesis, config=config)
     
     # Check if query already exists
     existing = session.query(SearchQuery).filter(
@@ -194,14 +195,46 @@ def should_run_query(
     return False, "Unknown status"
 
 
+from sqlalchemy import func
+
+def get_all_fetched_ids_for_job(
+    job_id: int,
+    session: Session
+) -> List[int]:
+    """
+    Get all paper IDs ever fetched for a specific job.
+    Uses database-side JSONB aggregation for efficiency.
+    
+    Args:
+        job_id: Job ID
+        session: SQLAlchemy session
+        
+    Returns:
+        List of paper IDs
+    """
+    # Flatten the fetched_paper_ids JSONB array from all runs for this job
+    # distinct() might be good if needed, but per-run logic should handle consistency
+    result = session.query(
+        func.jsonb_array_elements_text(SearchQueryRun.fetched_paper_ids)
+    ).filter(
+        SearchQueryRun.job_id == job_id
+    ).all()
+    
+    # helper returns tuples, convert to integers
+    if not result:
+        return []
+        
+    return [int(row[0]) for row in result]
+
+
 def record_search_run(
     search_query: SearchQuery,
     job_id: int,
     provider_used: str,
     reason: str,  # 'initial_attempt', 'reuse', 'expansion'
-    candidates_fetched: int,
-    candidates_accepted: int,
-    candidates_rejected: int,
+    fetched_paper_ids: List[int],
+    accepted_paper_ids: List[int],
+    rejected_paper_ids: List[int],
     session: Session
 ) -> SearchQueryRun:
     """
@@ -212,9 +245,9 @@ def record_search_run(
         job_id: Job ID
         provider_used: Provider name ('arxiv', 'crossref', etc.)
         reason: Execution reason
-        candidates_fetched: Total API results
-        candidates_accepted: After deduplication
-        candidates_rejected: Rejected candidates
+        fetched_paper_ids: List of all fetched paper IDs (job-unique)
+        accepted_paper_ids: List of accepted paper IDs
+        rejected_paper_ids: List of rejected paper IDs
         session: SQLAlchemy session
     
     Returns:
@@ -225,9 +258,9 @@ def record_search_run(
         job_id=job_id,
         provider_used=provider_used,
         reason=reason,
-        candidates_fetched=candidates_fetched,
-        candidates_accepted=candidates_accepted,
-        candidates_rejected=candidates_rejected,
+        fetched_paper_ids=fetched_paper_ids,
+        accepted_paper_ids=accepted_paper_ids,
+        rejected_paper_ids=rejected_paper_ids,
         signal_delta=None  # Computed later during signal evaluation
     )
     
@@ -237,7 +270,7 @@ def record_search_run(
     logger.info(
         f"Recorded SearchQueryRun: {run.id} "
         f"(query={search_query.id}, provider={provider_used}, "
-        f"fetched={candidates_fetched}, accepted={candidates_accepted})"
+        f"fetched={len(fetched_paper_ids)}, accepted={len(accepted_paper_ids)})"
     )
     
     return run

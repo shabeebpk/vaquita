@@ -245,8 +245,7 @@ def persist_paper(
         external_ids=candidate.get("external_ids"),
         fingerprint=fingerprint,
         source=candidate.get("source", "unknown"),
-        pdf_url=candidate.get("pdf_url"),
-        used_for_research=False  # Set only after signal evaluation
+        pdf_url=candidate.get("pdf_url")
     )
     
     session.add(paper)

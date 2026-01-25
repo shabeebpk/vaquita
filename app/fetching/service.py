@@ -27,7 +27,8 @@ from app.storage.models import (
 )
 from app.fetching.query_orchestrator import (
     compute_hypothesis_signature, get_or_create_search_query, 
-    should_run_query, record_search_run, QueryOrchestratorConfig
+    should_run_query, record_search_run, QueryOrchestratorConfig,
+    get_all_fetched_ids_for_job
 )
 from app.fetching.providers import (
     select_provider_for_domain, ProviderConfig, get_provider
@@ -91,9 +92,8 @@ class FetchService:
             if not hyp.get("passed_filter", False):
                 continue
             
-            sig = compute_hypothesis_signature(hyp)
             search_query = get_or_create_search_query(
-                hyp, job_id, session, llm_client=self.llm_client
+                hyp, job_id, session, llm_client=self.llm_client, config=self.query_config
             )
             
             reputation = search_query.reputation_score
@@ -172,7 +172,7 @@ class FetchService:
         candidates: List[Dict[str, Any]],
         job_id: int,
         session: Session
-    ) -> Tuple[List[Paper], int, int]:
+    ) -> Tuple[List[Paper], List[int], List[int]]:
         """
         Deduplicate candidates and persist accepted papers.
         
@@ -182,11 +182,11 @@ class FetchService:
             session: SQLAlchemy session
         
         Returns:
-            Tuple of (persisted_papers, accepted_count, rejected_count)
+            Tuple of (persisted_papers, accepted_ids, rejected_ids)
         """
         persisted = []
-        accepted_count = 0
-        rejected_count = 0
+        accepted_ids = []
+        rejected_ids = []
         
         for candidate in candidates:
             # Check for duplicate
@@ -197,22 +197,24 @@ class FetchService:
                     f"Rejecting duplicate: {candidate.get('title')} "
                     f"({dup_result.match_type})"
                 )
-                rejected_count += 1
+                if dup_result.matched_paper_id is not None:
+                    rejected_ids.append(dup_result.matched_paper_id)
             else:
                 # Persist paper
                 try:
                     paper = persist_paper(candidate, session, self.fingerprint_config)
                     persisted.append(paper)
-                    accepted_count += 1
+                    accepted_ids.append(paper.id)
                 except Exception as e:
                     logger.error(f"Failed to persist paper: {e}")
-                    rejected_count += 1
+                    # Cannot add to rejected_ids as we have no ID
         
         logger.info(
-            f"Deduplication result: {accepted_count} accepted, {rejected_count} rejected"
+            f"Deduplication result: {len(accepted_ids)} accepted, {len(rejected_ids)} rejected "
+            f"(duplicates)"
         )
         
-        return persisted, accepted_count, rejected_count
+        return persisted, accepted_ids, rejected_ids
     
     def ingest_abstracts(
         self,
@@ -316,7 +318,12 @@ class FetchService:
                 "ingestion_sources": []
             }
         
-        total_fetched = 0
+        # Load all previously fetched paper IDs for this job to enable job-scoped deduplication
+        # This set acts as the memory of "what this job has seen"
+        seen_ids = set(get_all_fetched_ids_for_job(job_id, session))
+        logger.info(f"Loaded {len(seen_ids)} previously fetched paper IDs for job {job_id}")
+        
+        total_fetched_new = 0
         total_accepted = 0
         total_rejected = 0
         all_runs = []
@@ -334,14 +341,29 @@ class FetchService:
                 logger.debug(f"No candidates fetched for SearchQuery {search_query.id}")
                 continue
             
-            # Deduplicate and persist
-            papers, accepted, rejected = self.deduplicate_and_persist(
+            # Deduplicate (Global) and persist
+            # This step resolves candidates to Paper IDs (reusing existing or creating new)
+            papers, accepted_ids, rejected_ids = self.deduplicate_and_persist(
                 candidates, job_id, session
             )
             
-            total_fetched += len(candidates)
-            total_accepted += accepted
-            total_rejected += rejected
+            # Job-Scoped Deduplication:
+            # Determine which of these papers are NEW to this job.
+            # fetched_paper_ids should only contain IDs that have never been recorded
+            # in a SearchQueryRun for this job before.
+            
+            # Combine all IDs resolved in this batch (both accepted and rejected globally)
+            current_batch_ids = accepted_ids + rejected_ids
+            
+            run_fetched_ids = []
+            for pid in current_batch_ids:
+                if pid not in seen_ids:
+                    run_fetched_ids.append(pid)
+                    seen_ids.add(pid)
+            
+            total_fetched_new += len(run_fetched_ids)
+            total_accepted += len(accepted_ids)
+            total_rejected += len(rejected_ids)
             
             # Ingest abstracts
             if papers:
@@ -349,23 +371,31 @@ class FetchService:
                 all_sources.extend(sources)
             
             # Record SearchQueryRun (without signal_delta; set by worker post-decision)
+            # accepted_paper_ids and rejected_paper_ids are RESERVED for signal attribution.
+            # During fetch, we only record what was fetched.
             reason = "initial_attempt" if search_query.status == "new" else "reuse"
             run = record_search_run(
-                search_query, job_id, provider, reason,
-                len(candidates), accepted, rejected, session
+                search_query=search_query,
+                job_id=job_id,
+                provider_used=provider,
+                reason=reason,
+                fetched_paper_ids=run_fetched_ids,
+                accepted_paper_ids=[],  # Reserved for signal
+                rejected_paper_ids=[],  # Reserved for signal
+                session=session
             )
             all_runs.append(run.id)
         
         # Commit all changes
         session.commit()
         logger.info(
-            f"FETCH_MORE completed: fetched={total_fetched}, "
+            f"FETCH_MORE completed: fetched_new={total_fetched_new}, "
             f"accepted={total_accepted}, rejected={total_rejected}"
         )
         
         return {
             "queries_executed": len(selected),
-            "papers_fetched": total_fetched,
+            "papers_fetched": total_fetched_new,
             "papers_accepted": total_accepted,
             "papers_rejected": total_rejected,
             "search_query_runs": all_runs,
