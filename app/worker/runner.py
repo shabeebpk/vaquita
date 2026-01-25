@@ -365,7 +365,7 @@ def process_job_stage(job_id: int) -> None:
                         passed += 1
 
                 logger.info(f"\n\n\nJob {job_id} path reasoning complete: {len(hypotheses)} hypotheses, {passed} passed filter, {inserted} persisted")
-                job_queue.put(6) #delete this
+                job_queue.put(job_id)
             except Exception as e:
                 emit_event(eq, "error", str(e))
                 logger.error(f"Path reasoning failed for job {job_id}: {e}")

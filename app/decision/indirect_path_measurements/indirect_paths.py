@@ -60,6 +60,7 @@ class IndirectPathMeasurements:
     @staticmethod
     def compute(
         hypotheses: List[Dict[str, Any]],
+        base_measurements: Dict[str, Any],
         previous_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -68,6 +69,7 @@ class IndirectPathMeasurements:
         Args:
             hypotheses: List of hypothesis dicts (each represents one indirect path).
                        Expected keys: source, target, path, confidence, passed_filter
+            base_measurements: Core measurements passed from core module.
             previous_snapshot: Previous DecisionResult.measurements_snapshot dict for temporal comparisons.
         
         Returns:
@@ -83,17 +85,8 @@ class IndirectPathMeasurements:
         
         measurements = {}
         
-        # === Basic Counts ===
-        measurements["total_hypothesis_count"] = len(hypotheses)
-        passed = [h for h in hypotheses if h.get("passed_filter", False)]
-        measurements["passed_hypothesis_count"] = len(passed)
-        measurements["pass_ratio"] = (
-            len(passed) / len(hypotheses) if hypotheses else 0.0
-        )
-        
         # === Group by (source, target) pairs ===
         pair_groups = IndirectPathMeasurements._group_by_source_target(hypotheses)
-        measurements["unique_source_target_pairs"] = len(pair_groups)
         
         # === Paths per pair ===
         paths_per_pair = IndirectPathMeasurements._paths_per_pair(pair_groups)
@@ -131,14 +124,6 @@ class IndirectPathMeasurements:
         
         # === Confidence metrics ===
         confidences = [h.get("confidence", 0) for h in hypotheses if h.get("passed_filter", False)]
-        measurements["max_normalized_confidence"] = (
-            min(max(confidences) / IndirectPathMeasurements.CONFIDENCE_NORM_FACTOR, 1.0)
-            if confidences else 0.0
-        )
-        measurements["mean_normalized_confidence"] = (
-            (sum(confidences) / len(confidences)) / IndirectPathMeasurements.CONFIDENCE_NORM_FACTOR
-            if confidences else 0.0
-        )
         measurements["confidence_variance"] = (
             IndirectPathMeasurements._compute_variance(confidences)
         )
@@ -147,21 +132,10 @@ class IndirectPathMeasurements:
         )
         
         # === Dominance clarity ===
-        measurements["is_dominant_clear"] = (
-            measurements["dominant_confidence_gap"] > IndirectPathMeasurements.DOMINANCE_GAP_THRESHOLD
-        )
         
         # === Diversity metrics ===
-        measurements["diversity_score"] = (
-            IndirectPathMeasurements._compute_diversity_score(hypotheses)
-        )
         measurements["pair_distribution_entropy"] = (
             IndirectPathMeasurements._compute_entropy(paths_per_pair)
-        )
-        
-        # === Graph density (simplified) ===
-        measurements["graph_density"] = (
-            IndirectPathMeasurements._compute_graph_density(hypotheses)
         )
         
         # === Path structure metrics ===
@@ -182,7 +156,7 @@ class IndirectPathMeasurements:
         if IndirectPathMeasurements.COMPUTE_TEMPORAL_PLACEHOLDERS:
             measurements["evidence_growth_rate"] = (
                 IndirectPathMeasurements._compute_growth_rate(
-                    len(passed), previous_snapshot
+                    base_measurements.get("passed_hypothesis_count", 0), previous_snapshot
                 )
             )
             measurements["hypothesis_stability"] = (
@@ -439,24 +413,15 @@ class IndirectPathMeasurements:
     def _zero_measurements() -> Dict[str, Any]:
         """Return zero-initialized measurements dict."""
         return {
-            "total_hypothesis_count": 0,
-            "passed_hypothesis_count": 0,
-            "pass_ratio": 0.0,
-            "unique_source_target_pairs": 0,
             "max_paths_per_pair": 0,
             "mean_paths_per_pair": 0.0,
             "dominant_pair_path_ratio": 0.0,
             "dominant_pair_id": None,
             "unique_intermediate_nodes_dominant": 0,
             "redundancy_score": 0.0,
-            "max_normalized_confidence": 0.0,
-            "mean_normalized_confidence": 0.0,
             "confidence_variance": 0.0,
             "dominant_confidence_gap": 0.0,
-            "is_dominant_clear": False,
-            "diversity_score": 0.0,
             "pair_distribution_entropy": 0.0,
-            "graph_density": 0.0,
             "mean_path_length": 0.0,
             "path_length_variance": 0.0,
             "filter_rejection_reasons": {},

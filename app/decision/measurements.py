@@ -93,7 +93,6 @@ def compute_measurements(
     else:
         measurements["filtered_to_total_ratio"] = 0.0
     
-    measurements["has_any_viable_hypothesis"] = measurements["total_hypothesis_count"] > 0
     
     # ===== Statistics computed ONLY from passed hypotheses =====
     config = get_decision_config()
@@ -101,17 +100,6 @@ def compute_measurements(
     if passed_hypotheses:
         # Raw confidence (integer support counts)
         confidences = [h.get("confidence", 0) for h in passed_hypotheses]
-        measurements["max_confidence"] = max(confidences) if confidences else 0
-        measurements["mean_confidence"] = sum(confidences) / len(confidences) if confidences else 0
-        
-        # Standard deviation (simple)
-        mean = measurements["mean_confidence"]
-        if len(confidences) > 1:
-            variance = sum((c - mean) ** 2 for c in confidences) / len(confidences)
-            measurements["confidence_std"] = variance ** 0.5
-        else:
-            measurements["confidence_std"] = 0.0
-        
         # Normalized confidence (0-1 range)
         # normalized = min(raw_confidence / NORMALIZATION_FACTOR, 1.0)
         normalized_confidences = [
@@ -149,21 +137,15 @@ def compute_measurements(
             measurements["is_dominant_clear"] = (
                 gap > config.DOMINANT_GAP_RATIO * first_conf if first_conf > 0 else False
             )
-            measurements["dominant_hypothesis_index"] = 0
         else:
             measurements["is_dominant_clear"] = len(passed_hypotheses) > 0
-            measurements["dominant_hypothesis_index"] = 0 if passed_hypotheses else -1
     else:
         # No passed hypotheses
-        measurements["max_confidence"] = 0
-        measurements["mean_confidence"] = 0.0
-        measurements["confidence_std"] = 0.0
         measurements["max_normalized_confidence"] = 0.0
         measurements["mean_normalized_confidence"] = 0.0
         measurements["unique_source_target_pairs"] = 0
         measurements["diversity_score"] = 0.0
         measurements["is_dominant_clear"] = False
-        measurements["dominant_hypothesis_index"] = -1
     
     # ===== Graph-level signals =====
     semantic_nodes = semantic_graph.get("nodes", [])

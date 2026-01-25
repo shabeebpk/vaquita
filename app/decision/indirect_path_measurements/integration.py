@@ -45,7 +45,7 @@ def extend_measurements_with_indirect_paths(
     
     try:
         indirect_measurements = IndirectPathMeasurements.compute(
-            hypotheses, previous_snapshot
+            hypotheses, base_measurements, previous_snapshot
         )
         base_measurements.update(indirect_measurements)
         logger.debug(

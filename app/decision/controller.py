@@ -132,6 +132,7 @@ class DecisionController:
             "fallback_reason": fallback_reason,
         }
         
+        logger.info(f"\n\n\n\n measurements: {measurements}\n\n\n\n")
         # Persist decision result
         self._persist_decision(job_id, result)
         
