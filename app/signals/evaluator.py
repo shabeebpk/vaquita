@@ -7,7 +7,7 @@ Signal never directly triggers control flow; it only updates query learning stat
 """
 import logging
 import os
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
