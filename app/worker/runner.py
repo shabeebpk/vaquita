@@ -455,44 +455,47 @@ def process_job_stage(job_id: int) -> None:
                     "measurements": decision_record.measurements_snapshot
                 }
 
-                # 2. Find pending SearchQueryRun strictly between previous decision and this one
-                pending_run = find_pending_run_for_evaluation(
+                # 2. Find pending SearchQueryRuns strictly between previous decision and this one
+                pending_runs = find_pending_run_for_evaluation(
                     job_id=job_id,
                     current_decision=current_decision_snapshot,
                     session=session
                 )
                 
-                if pending_run:
-                    logger.info(f"Refactoring Signal: Found pending SearchQueryRun {pending_run.id}")
+                if pending_runs:
+                    logger.info(f"Refactoring Signal: Found {len(pending_runs)} pending SearchQueryRuns")
                     
-                    # 3. Get the decision strictly BEFORE this run
-                    before_decision = get_last_decision_before_run(job_id, pending_run, session)
+                    # 3. Get the decision strictly BEFORE the FIRST run (the anchor for delta)
+                    # Use the oldest pending run to find the window's starting decision
+                    anchor_run = pending_runs[-1] 
+                    before_decision = get_last_decision_before_run(job_id, anchor_run, session)
                     
                     if before_decision:
-                        # 4. Compute Delta (Current - Previous)
+                        # 4. Compute Delta (Current - Previous) - Done ONCE per window
                         delta = compute_measurement_delta(
                             before_decision["measurements"],
                             current_decision_snapshot["measurements"]
                         )
-                        logger.info(f"Signal delta: {delta:.3f}")
+                        logger.info(f"Signal delta for window: {delta:.3f}")
                         
                         # 5. Classify
                         signal_value, new_status = classify_signal(delta)
                         
-                        # 6. Apply Signal (Attribution)
-                        apply_signal_result(pending_run, signal_value, new_status, session)
+                        # 6. Apply Signal (Attribution) to ALL pending runs
+                        for run in pending_runs:
+                            apply_signal_result(run, signal_value, new_status, session)
+                            logger.info(f"Signal applied to Run {run.id}: value={signal_value}, status={new_status}")
+                        
                         session.commit()
                         
                         emit_event(eq, "signal", {
                             "delta": delta,
                             "signal_value": signal_value,
                             "status": new_status,
-                            "search_query_id": pending_run.search_query_id
+                            "affected_runs": [r.id for r in pending_runs]
                         })
-                        
-                        logger.info(f"Signal applied to Run {pending_run.id}: value={signal_value}, status={new_status}")
                     else:
-                        logger.warning(f"Could not find decision before SearchQueryRun {pending_run.id}; skipping signal.")
+                        logger.warning(f"Could not find decision before SearchQueryRun {anchor_run.id}; skipping signal.")
                 else:
                     logger.debug("No pending SearchQueryRun found in strict timing window (Signal skipped).")
                 

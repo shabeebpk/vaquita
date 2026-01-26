@@ -133,16 +133,16 @@ def find_pending_run_for_evaluation(
     job_id: int,
     current_decision: Dict[str, Any],
     session: Session
-) -> Optional[SearchQueryRun]:
+) -> List[SearchQueryRun]:
     """
-    Find the pending SearchQueryRun that occurred between the previous decision
+    Find all pending SearchQueryRuns that occurred between the previous decision
     and the current decision.
     
     Strict Timing Rule:
     previous_decision.created_at < run.created_at < current_decision.created_at
     
     Attribution Rule:
-    Only returns a run if it has NOT yet had a signal applied (signal_delta is None).
+    Only returns runs that have NOT yet had a signal applied (signal_delta is None).
     
     Args:
         job_id: Job ID
@@ -150,7 +150,7 @@ def find_pending_run_for_evaluation(
         session: SQLAlchemy session
         
     Returns:
-        SearchQueryRun instance or None
+        List of SearchQueryRun instances (empty list if none found)
     """
     # 1. Find previous decision
     previous_decision = session.query(DecisionResult).filter(
@@ -160,9 +160,9 @@ def find_pending_run_for_evaluation(
     
     if not previous_decision:
         logger.info("No previous decision found; cannot establish time window for signal attribution.")
-        return None
+        return []
     
-    # 2. Find SearchQueryRun in the time window with no signal applied
+    # 2. Find SearchQueryRuns in the time window with no signal applied
     pending_runs = session.query(SearchQueryRun).filter(
         SearchQueryRun.job_id == job_id,
         SearchQueryRun.created_at > previous_decision.created_at,
@@ -175,14 +175,9 @@ def find_pending_run_for_evaluation(
             f"No pending SearchQueryRun found between {previous_decision.created_at} "
             f"and {current_decision['created_at']}"
         )
-        return None
+        return []
         
-    if len(pending_runs) > 1:
-        logger.warning(
-            f"Found {len(pending_runs)} pending runs in window. Attributing to the most recent one."
-        )
-        
-    return pending_runs[0]
+    return pending_runs
 
 
 def compute_measurement_delta(

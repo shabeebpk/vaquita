@@ -109,7 +109,7 @@ class FetchService:
         
         # Take top-K
         selected = candidates[:self.fetch_config.top_k_hypotheses]
-        logger.info(f"Selected {len(selected)} hypotheses for fetching")
+        logger.info(f"Selected {len(selected)} hypotheses for fetching \n\n\n {selected} \n\n\n")
         
         return [(h, q) for h, q, _ in selected]
     
