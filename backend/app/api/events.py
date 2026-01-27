@@ -1,3 +1,4 @@
+import os
 import json
 import asyncio
 import redis.asyncio as redis
@@ -7,7 +8,8 @@ from fastapi.responses import StreamingResponse
 router = APIRouter()
 
 
-r = redis.Redis(host="localhost", port=6379, db=2)
+# r = redis.Redis(host=os.getenv("REDIS_URL"), port=6379, db=2)
+r = redis.from_url(os.getenv("REDIS_URL"))
 
 async def event_stream(user_id: int = 1):
     pubsub = r.pubsub()

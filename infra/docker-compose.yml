@@ -1,0 +1,52 @@
+services:
+  api:
+    build:
+      context: ../backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+      - /data/literature_uploads:/app/uploads
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ../backend/.env
+    depends_on:
+      - postgres
+      - redis
+
+  worker:
+    build:
+      context: ../backend
+
+    command: celery -A celery_app.celery_app worker --loglevel=info
+
+    volumes:
+      - ../backend:/app
+      - /data/literature_uploads:/app/uploads
+
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ../backend/.env
+    depends_on:
+      - redis
+
+  postgres:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: literature_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+
+volumes:
+  pgdata:

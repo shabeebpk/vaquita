@@ -9,6 +9,7 @@ Architecture:
 Separation of concerns ensures each component is independently testable and replaceable.
 """
 
+import builtins
 import logging
 from fastapi import FastAPI
 
@@ -17,7 +18,8 @@ from app.api.events import router as events_router
 from app.api.test import router as test_router
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
+builtins.logger = logging.getLogger("app")
 
 app = FastAPI(
     title="Literature Review System",

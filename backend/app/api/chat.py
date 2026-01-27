@@ -50,7 +50,7 @@ async def unified_chat(
             uploaded_names = []
             
             # Job-specific original folder
-            job_upload_dir = os.path.join("uploads", f"job_{job_id}", "original")
+            job_upload_dir = os.path.join("uploads", f"{job_id}", "original")
             os.makedirs(job_upload_dir, exist_ok=True)
             
             for file in files:

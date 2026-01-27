@@ -17,6 +17,5 @@ spacy
 sentence-transformers
 scikit-learn
 scipy
-networkx
 celery
 redis
