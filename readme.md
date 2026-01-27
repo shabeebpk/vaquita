@@ -21,7 +21,7 @@ alembic revision --autogenerate -m "msg here"
 alembic upgrade head
 
 ## To run the app
-uvicorn app.main:app --reload --log-level info
+uvicorn app.main:app --reload --reload-dir app --reload-dir worker --log-level info
 
 ## All about postgresql
 # Some commmads at psql shell

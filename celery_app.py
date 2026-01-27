@@ -10,6 +10,5 @@ celery_app = Celery(
 )
 
 celery_app.conf.imports = (
-    "worker.test_tasks",
     "worker.stage_tasks",
 )
