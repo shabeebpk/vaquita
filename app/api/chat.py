@@ -25,7 +25,7 @@ from app.storage.db import engine
 from app.storage.models import Job, ConversationMessage, IngestionSource, MessageRole, MessageType
 from app.input.classifier import get_classifier, ClassificationLabel
 from app.schemas.ingestion import ChatMessageResponse
-from app.core.queues import job_queue
+from app.schemas.ingestion import ChatMessageResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -152,8 +152,12 @@ async def submit_message(request: ChatMessageRequest) -> ChatMessageResponse:
         # Commit all changes
         session.commit()
         
-        # Enqueue job for runner to process
-        job_queue.put(job.id)
+        # Trigger ingestion stage
+        from worker.stage_tasks import ingest_stage
+        from events import publish_event
+        
+        publish_event({"job_id": job.id, "stage": "input", "status": "content_received"})
+        ingest_stage.delay(job.id)
         
         logger.info(
             f"Message {user_message.id} stored in job {job.id}; "

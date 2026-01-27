@@ -9,12 +9,6 @@ Queues:
 
 from queue import Queue
 
-# Main job processing queue
-job_queue = Queue()
-
-# File extraction/text extraction queue
-extraction_queue = Queue()
-
 # Per-job event queues for streaming updates
 event_queues = {}
 

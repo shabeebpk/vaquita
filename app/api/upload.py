@@ -25,7 +25,7 @@ from app.storage.db import engine
 from app.storage.models import Job, File, FileOriginType
 from app.ingestion.files import save_file
 from app.schemas.ingestion import UploadResponse
-from app.core.queues import job_queue, extraction_queue
+from app.schemas.ingestion import UploadResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -103,6 +103,9 @@ async def upload_files(
                 )
                 session.add(file_row)
                 session.flush()
+
+
+
                 
                 uploaded_filenames.append(uploaded_file.filename)
                 file_ids.append(file_row.id)
@@ -119,32 +122,26 @@ async def upload_files(
         # Commit file rows
         session.commit()
         
-        # Enqueue extraction task for each file
-        # The background extraction worker will:
-        # 1. Read the file from disk
-        # 2. Extract text
-        # 3. Create IngestionSource row with source_type=pdf_text, source_ref=file:{id}
-        # 4. Update job status to READY_TO_INGEST when done
-        for file_id in file_ids:
-            extraction_queue.put({
-                "job_id": job.id,
-                "file_id": file_id,
-                "task_type": "extract_text"
-            })
+        # 4. Coordinate extraction and ingestion using a Celery Chord
+        from celery import chord
+        from worker.stage_tasks import extract_stage, mark_ready_stage
+        
+        extraction_tasks = [extract_stage.s(job.id, file_id) for file_id in file_ids]
+        
+        if extraction_tasks:
+            # Chord: Run all extractions, then mark as READY_TO_INGEST
+            chord(extraction_tasks)(mark_ready_stage.s(job.id))
         
         logger.info(
-            f"Enqueued {len(file_ids)} extraction tasks for job {job.id}; "
-            f"files: {uploaded_filenames}"
+            f"Enqueued {len(file_ids)} coordinated extraction tasks for job {job.id}; "
+            f"ingestion will start once all files are processed."
         )
-        
-        # Enqueue job for runner to monitor
-        job_queue.put(job.id)
         
         return UploadResponse(
             job_id=job.id,
             uploaded_files=uploaded_filenames,
             extraction_enqueued=True,
-            next_expected_action="Files are being extracted. Ingestion will process the extracted text automatically."
+            next_expected_action="Files are being extracted concurrently. Ingestion will follow automatically."
         )
 
 

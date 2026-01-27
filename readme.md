@@ -79,3 +79,8 @@ python -m spacy download en_core_web_sm
 python3 -m scripts.draw_graph --job-id 6
 
 literature_db
+
+
+celery
+celery -A celery_app worker --loglevel=info
+
