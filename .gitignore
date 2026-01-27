@@ -2,3 +2,4 @@ projenv/
 *.log
 /data/literature_uploads
 pgdata/
+__pycache__/
