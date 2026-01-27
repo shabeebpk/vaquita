@@ -3,3 +3,6 @@ projenv/
 /data/literature_uploads
 pgdata/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
