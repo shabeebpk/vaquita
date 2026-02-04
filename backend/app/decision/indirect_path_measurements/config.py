@@ -13,54 +13,27 @@ logger = logging.getLogger(__name__)
 class IndirectPathConfig:
     """Configuration for indirect path measurements."""
     
-    # Enable/disable measurements
-    MEASUREMENTS_ENABLED: bool = True
-    
-    # Temporal placeholder computation
-    TEMPORAL_PLACEHOLDERS: bool = True
-    
-    # Normalization factor for confidence (raw_confidence / this = normalized [0,1])
-    CONFIDENCE_NORM_FACTOR: float = 5.0
-    
-    # Dominance clarity threshold (confidence gap above this = clear dominant)
-    DOMINANCE_GAP_THRESHOLD: float = 0.2
-    
-    # Path length thresholds for structure analysis
-    MIN_PATH_LENGTH: int = 2  # Minimum nodes in a path
-    MAX_PATH_LENGTH: int = 2  # Maximum nodes before warning
-    
-    @classmethod
-    def load_from_env(cls) -> None:
-        """Load configuration from environment variables."""
+    def __init__(self, job_config: dict = None):
+        """Initialize config from job configuration."""
         from app.config.system_settings import system_settings
+        job_config = job_config or {}
+        expert_settings = job_config.get("expert_settings", {})
+        heuristics = expert_settings.get("heuristics", {})
         
-        cls.MEASUREMENTS_ENABLED = system_settings.INDIRECT_PATH_MEASUREMENTS_ENABLED
-        cls.TEMPORAL_PLACEHOLDERS = system_settings.INDIRECT_PATH_TEMPORAL_PLACEHOLDERS
-        cls.CONFIDENCE_NORM_FACTOR = float(system_settings.DECISION_CONFIDENCE_NORM_FACTOR)
-        cls.DOMINANCE_GAP_THRESHOLD = system_settings.INDIRECT_PATH_DOMINANCE_GAP_THRESHOLD
-        cls.MIN_PATH_LENGTH = system_settings.INDIRECT_PATH_MIN_LENGTH
-        cls.MAX_PATH_LENGTH = system_settings.INDIRECT_PATH_MAX_LENGTH
+        # Feature toggles from SystemSettings (Invariants)
+        self.MEASUREMENTS_ENABLED = system_settings.INDIRECT_PATH_MEASUREMENTS_ENABLED
+        self.TEMPORAL_PLACEHOLDERS = system_settings.INDIRECT_PATH_TEMPORAL_PLACEHOLDERS
         
-        logger.info(
+        # Parameters from JobConfig (Heuristics)
+        self.CONFIDENCE_NORM_FACTOR = float(heuristics.get("decision_confidence_norm_factor", 10.0))
+        self.DOMINANCE_GAP_THRESHOLD = float(heuristics.get("indirect_path_dominance_gap_threshold", 0.2))
+        self.MIN_PATH_LENGTH = int(heuristics.get("indirect_path_min_length", 3))
+        self.MAX_PATH_LENGTH = int(heuristics.get("indirect_path_max_length", 4))
+        
+        logger.debug(
             f"IndirectPathConfig loaded: "
-            f"enabled={cls.MEASUREMENTS_ENABLED}, "
-            f"temporal={cls.TEMPORAL_PLACEHOLDERS}, "
-            f"norm_factor={cls.CONFIDENCE_NORM_FACTOR}"
+            f"enabled={self.MEASUREMENTS_ENABLED}, "
+            f"temporal={self.TEMPORAL_PLACEHOLDERS}, "
+            f"norm_factor={self.CONFIDENCE_NORM_FACTOR}, "
+            f"gap_threshold={self.DOMINANCE_GAP_THRESHOLD}"
         )
-    
-    @classmethod
-    def to_dict(cls) -> Dict[str, Any]:
-        """Export config as dict."""
-        return {
-            "MEASUREMENTS_ENABLED": cls.MEASUREMENTS_ENABLED,
-            "TEMPORAL_PLACEHOLDERS": cls.TEMPORAL_PLACEHOLDERS,
-            "CONFIDENCE_NORM_FACTOR": cls.CONFIDENCE_NORM_FACTOR,
-            "DOMINANCE_GAP_THRESHOLD": cls.DOMINANCE_GAP_THRESHOLD,
-            "MIN_PATH_LENGTH": cls.MIN_PATH_LENGTH,
-            "MAX_PATH_LENGTH": cls.MAX_PATH_LENGTH,
-        }
-
-
-def get_indirect_path_config() -> IndirectPathConfig:
-    """Get the global indirect path config class."""
-    return IndirectPathConfig

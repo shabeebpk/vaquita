@@ -22,22 +22,24 @@ logger = logging.getLogger(__name__)
 class QueryOrchestratorConfig:
     """Configuration for query orchestration."""
     
-    def __init__(self):
-        from app.config.system_settings import system_settings
+    def __init__(self, job_config: dict = None):
+        """Initialize config from job configuration."""
+        job_config = job_config or {}
+        query_config = job_config.get("query_config", {})
         
         # Max signature length for hypothesis_signature
-        self.signature_length = system_settings.QUERY_SIGNATURE_LENGTH
+        self.signature_length = int(query_config.get("signature_length", 64))
         
         # Initial reputation score for new queries
-        self.initial_reputation = system_settings.QUERY_INITIAL_REPUTATION
+        self.initial_reputation = int(query_config.get("initial_reputation", 0))
         
         # Reputation decay per exhaustion
-        self.reputation_exhaustion_decay = system_settings.QUERY_REPUTATION_EXHAUSTION_DECAY
+        self.reputation_exhaustion_decay = int(query_config.get("reputation_exhaustion_decay", -5))
         
         # Max reuse attempts for a single query before marking exhausted
-        self.max_reuse_attempts = system_settings.QUERY_MAX_REUSE_ATTEMPTS
+        self.max_reuse_attempts = int(query_config.get("max_reuse_attempts", 3))
         
-        logger.info(
+        logger.debug(
             f"QueryOrchestratorConfig: signature_len={self.signature_length}, "
             f"initial_rep={self.initial_reputation}, max_reuse={self.max_reuse_attempts}"
         )
@@ -237,7 +239,8 @@ def record_search_run(
     fetched_paper_ids: List[int],
     accepted_paper_ids: List[int],
     rejected_paper_ids: List[int],
-    session: Session
+    session: Session,
+    config: Optional[QueryOrchestratorConfig] = None
 ) -> SearchQueryRun:
     """
     Record execution of a SearchQuery.
@@ -251,6 +254,7 @@ def record_search_run(
         accepted_paper_ids: List of accepted paper IDs
         rejected_paper_ids: List of rejected paper IDs
         session: SQLAlchemy session
+        config: QueryOrchestratorConfig (unused but accepted for API consistency)
     
     Returns:
         SearchQueryRun model instance

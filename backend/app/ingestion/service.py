@@ -86,6 +86,19 @@ class IngestionService:
                     f"Cannot ingest job {job_id}: status is '{job.status}', expected 'READY_TO_INGEST'. "
                     "Caller must ensure job is in correct state before invoking ingestion."
                 )
+            
+            # Load defaults from job_config if not provided
+            ingest_config = job.job_config.get("expert_settings", {}).get("ingestion", {})
+            
+            if segmentation_kwargs is None:
+                segmentation_kwargs = {
+                    "sentences_per_block": int(ingest_config.get("sentences_per_block", 3))
+                }
+            
+            if normalization_kwargs is None:
+                normalization_kwargs = {
+                    "apply_lexical_repair": bool(ingest_config.get("enable_lexical_repair", False))
+                }
 
             sources_processed = 0
             blocks_created = 0

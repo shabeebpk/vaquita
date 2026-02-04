@@ -44,15 +44,17 @@ logger = logging.getLogger(__name__)
 class FetchServiceConfig:
     """Configuration for fetch service."""
     
-    def __init__(self):
-        from app.config.system_settings import system_settings
+    def __init__(self, job_config: dict = None):
+        job_config = job_config or {}
+        query_config = job_config.get("query_config", {})
+        
         # Max hypotheses to fetch for in one FETCH_MORE cycle
-        self.top_k_hypotheses = system_settings.FETCH_TOP_K_HYPOTHESES
+        self.top_k_hypotheses = int(query_config.get("fetch_top_k_hypotheses", 1))
         
         # Min reputation to consider hypothesis for fetch
-        self.min_reputation_for_fetch = system_settings.FETCH_MIN_REPUTATION
+        self.min_reputation_for_fetch = int(query_config.get("fetch_min_reputation", -10))
         
-        logger.info(
+        logger.debug(
             f"FetchServiceConfig: top_k={self.top_k_hypotheses}, "
             f"min_reputation={self.min_reputation_for_fetch}"
         )
@@ -63,8 +65,6 @@ class FetchService:
     
     def __init__(self, llm_client: Optional[Any] = None):
         self.llm_client = llm_client
-        self.fetch_config = FetchServiceConfig()
-        self.query_config = QueryOrchestratorConfig()
         self.provider_config = ProviderConfig()
         self.fingerprint_config = FingerprintConfig()
         
@@ -73,7 +73,9 @@ class FetchService:
     def select_top_hypotheses(
         self,
         hypotheses: List[Dict[str, Any]],
-        session: Session
+        session: Session,
+        query_config: QueryOrchestratorConfig,
+        fetch_config: FetchServiceConfig
     ) -> List[Tuple[Dict[str, Any], SearchQuery]]:
         """
         Select top-K passed hypotheses for fetching.
@@ -82,6 +84,8 @@ class FetchService:
         Args:
             hypotheses: List of hypothesis dicts (passed filter)
             session: SQLAlchemy session
+            query_config: Job-scoped query config
+            fetch_config: Job-scoped fetch config
         
         Returns:
             List of (hypothesis, SearchQuery) tuples
@@ -94,10 +98,13 @@ class FetchService:
                 continue
             
             search_query = get_or_create_search_query(
-                hyp, job_id, session, llm_client=self.llm_client, config=self.query_config
+                hyp, job_id, session, llm_client=self.llm_client, config=query_config
             )
             
             reputation = search_query.reputation_score
+            if reputation < fetch_config.min_reputation_for_fetch:
+                 continue
+
             candidates.append((hyp, search_query, reputation))
         
         # Sort by reputation (descending), then by status (new > reusable)
@@ -119,7 +126,8 @@ class FetchService:
         hypothesis: Dict[str, Any],
         search_query: SearchQuery,
         job_id: int,
-        session: Session
+        session: Session,
+        query_config: QueryOrchestratorConfig
     ) -> Tuple[List[Dict[str, Any]], str]:
         """
         Fetch papers for one hypothesis using appropriate provider.
@@ -134,7 +142,7 @@ class FetchService:
             Tuple of (paper_candidates, provider_used)
         """
         # Determine reason for running query
-        should_run, reason = should_run_query(search_query, session, self.query_config)
+        should_run, reason = should_run_query(search_query, session, query_config)
         if not should_run:
             logger.info(f"Skipping SearchQuery {search_query.id}: {reason}")
             return [], "none"
@@ -268,46 +276,19 @@ class FetchService:
     ) -> Dict[str, Any]:
         """
         Execute FETCH_MORE pipeline: PHASE 1 SOURCE CREATION ONLY.
-        
-        STRICT TWO-PHASE MODEL:
-        This method ONLY creates IngestionSource rows. It NEVER calls IngestionService.
-        Phase 1 responsibility: Source discovery and creation
-        Phase 2 responsibility: Ingestion processing (handled by process_job_stage + IngestionService)
-        
-        Steps (Phase 1 only):
-        1. Select top-K hypotheses
-        2. For each: fetch papers, deduplicate
-        3. Create IngestionSource rows with source_type=PAPER_ABSTRACT, processed=false
-        4. Return list of IngestionSource IDs created
-        
-        Orchestrator (process_job_stage) is responsible for:
-        - Verifying IngestionSource rows exist (verify_fetch_sources_ready)
-        - Transitioning job status to READY_TO_INGEST
-        - Next cycle: calling IngestionService.ingest_job()
-        - Rebuilding semantic graph
-        - Rerunning path reasoning
-        - Rerunning decision layer
-        
-        Args:
-            job_id: Job ID
-            hypotheses: List of hypothesis dicts
-            session: SQLAlchemy session
-        
-        Returns:
-            Dict with execution summary:
-            {
-              "queries_executed": int,
-              "papers_fetched": int,
-              "papers_accepted": int,
-              "papers_rejected": int,
-              "search_query_runs": [SearchQueryRun ids],
-              "ingestion_sources": [IngestionSource ids] <- only source creation, NOT ingestion
-            }
         """
         logger.info(f"Starting FETCH_MORE for job {job_id}")
         
+        # Load Job Configuration
+        job = session.query(Job).filter(Job.id == job_id).first()
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
+            
+        fetch_config = FetchServiceConfig(job.job_config)
+        query_config = QueryOrchestratorConfig(job.job_config)
+        
         # Select top hypotheses
-        selected = self.select_top_hypotheses(hypotheses, session)
+        selected = self.select_top_hypotheses(hypotheses, session, query_config, fetch_config)
         if not selected:
             logger.info("No hypotheses selected for fetching")
             return {
@@ -320,7 +301,6 @@ class FetchService:
             }
         
         # Load all previously fetched paper IDs for this job to enable job-scoped deduplication
-        # This set acts as the memory of "what this job has seen"
         seen_ids = set(get_all_fetched_ids_for_job(job_id, session))
         logger.info(f"Loaded {len(seen_ids)} previously fetched paper IDs for job {job_id}")
         
@@ -335,7 +315,7 @@ class FetchService:
             
             # Fetch papers
             candidates, provider = self.fetch_papers_for_hypothesis(
-                hypothesis, search_query, job_id, session
+                hypothesis, search_query, job_id, session, query_config
             )
             
             if not candidates:
@@ -343,17 +323,11 @@ class FetchService:
                 continue
             
             # Deduplicate (Global) and persist
-            # This step resolves candidates to Paper IDs (reusing existing or creating new)
             papers, accepted_ids, rejected_ids = self.deduplicate_and_persist(
                 candidates, job_id, session
             )
             
-            # Job-Scoped Deduplication:
-            # Determine which of these papers are NEW to this job.
-            # fetched_paper_ids should only contain IDs that have never been recorded
-            # in a SearchQueryRun for this job before.
-            
-            # Combine all IDs resolved in this batch (both accepted and rejected globally)
+            # Job-Scoped Deduplication
             current_batch_ids = accepted_ids + rejected_ids
             
             run_fetched_ids = []
@@ -371,9 +345,7 @@ class FetchService:
                 sources = self.ingest_abstracts(papers, job_id, None, session)
                 all_sources.extend(sources)
             
-            # Record SearchQueryRun (without signal_delta; set by worker post-decision)
-            # accepted_paper_ids and rejected_paper_ids are RESERVED for signal attribution.
-            # During fetch, we only record what was fetched.
+            # Record SearchQueryRun
             reason = "initial_attempt" if search_query.status == "new" else "reuse"
             run = record_search_run(
                 search_query=search_query,
@@ -381,13 +353,13 @@ class FetchService:
                 provider_used=provider,
                 reason=reason,
                 fetched_paper_ids=run_fetched_ids,
-                accepted_paper_ids=[],  # Reserved for signal
-                rejected_paper_ids=[],  # Reserved for signal
-                session=session
+                accepted_paper_ids=[],
+                rejected_paper_ids=[],
+                session=session,
+                config=query_config
             )
             all_runs.append(run.id)
         
-        # Commit all changes
         session.commit()
         logger.info(
             f"FETCH_MORE completed: fetched_new={total_fetched_new}, "

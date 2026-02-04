@@ -9,7 +9,7 @@ from typing import Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.storage.models import SearchQueryRun, SearchQuery
+from app.storage.models import SearchQueryRun, SearchQuery, Job
 from app.signals.evaluator import SignalConfig
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ def classify_signal(
     
     Args:
         delta: Weighted measurement delta
-        config: SignalConfig (created if None)
+        config: SignalConfig (created if None, using defaults)
     
     Returns:
         Tuple of (signal_delta: int, status: str)
@@ -51,21 +51,14 @@ def apply_signal_result(
 ) -> None:
     """
     Apply signal result to SearchQuery: update status, reputation, and papers.
-    
-    Side effects:
-    - Updates SearchQueryRun.signal_delta
-    - Updates SearchQuery.status and reputation_score
-    - Marks papers as used_for_research if positive signal
-    
-    Args:
-        search_query_run: SearchQueryRun instance
-        signal_delta: 1, 0, or -1
-        new_status: 'reusable', 'exhausted', or 'blocked'
-        session: SQLAlchemy session
-        config: SignalConfig (created if None)
     """
     if config is None:
-        config = SignalConfig()
+        # Load from job
+        job = session.query(Job).filter(Job.id == search_query_run.job_id).first()
+        if job and job.job_config:
+            config = SignalConfig(job.job_config)
+        else:
+            config = SignalConfig()
     
     search_query = session.query(SearchQuery).filter(
         SearchQuery.id == search_query_run.search_query_id

@@ -1,0 +1,146 @@
+{
+    "allowed_domains": [
+        {
+            "name": "biomedical",
+            "keywords": [
+                "protein",
+                "gene",
+                "cell",
+                "clinical",
+                "disease",
+                "drug",
+                "therapy"
+            ]
+        },
+        {
+            "name": "computer_science",
+            "keywords": [
+                "algorithm",
+                "network",
+                "software",
+                "data",
+                "learning",
+                "compute"
+            ]
+        },
+        {
+            "name": "physics",
+            "keywords": [
+                "energy",
+                "quantum",
+                "particle",
+                "force",
+                "matter",
+                "wave"
+            ]
+        },
+        {
+            "name": "chemistry",
+            "keywords": [
+                "molecule",
+                "reaction",
+                "bond",
+                "catalyst",
+                "synthesis"
+            ]
+        },
+        {
+            "name": "mathematics",
+            "keywords": [
+                "theorem",
+                "proof",
+                "equation",
+                "logic",
+                "topology",
+                "algebra"
+            ]
+        },
+        {
+            "name": "engineering",
+            "keywords": [
+                "design",
+                "system",
+                "control",
+                "material",
+                "process",
+                "mechanical"
+            ]
+        }
+    ],
+    "default_job_config": {
+        "domain": null,
+        "focus_areas": [],
+        "excluded_topics": [],
+        "preferred_evidence_type": null,
+        "reasoning_mode": "balanced",
+        "max_papers_for_job": null,
+        "expert_settings": {
+            "assumptions": [],
+            "preferred_predicates": [],
+            "causal_bias": false,
+            "confidence_prior": 0.5,
+            "ingestion": {
+                "segmentation_strategy": "sentences",
+                "sentences_per_block": 3,
+                "enable_lexical_repair": false
+            },
+            "domain_resolution": {
+                "deterministic_threshold": 0.7,
+                "llm_threshold": 0.6,
+                "resolver_prompt_file": "domain_resolver.txt"
+            },
+            "heuristics": {
+                "decision_confidence_norm_factor": 10,
+                "decision_high_confidence_threshold": 0.7,
+                "decision_dominant_gap_ratio": 0.3,
+                "decision_low_diversity_pairs_threshold": 2,
+                "decision_diversity_ratio_threshold": 0.3,
+                "decision_sparse_graph_density_threshold": 0.05,
+                "decision_path_support_threshold": 2,
+                "decision_stability_cycle_threshold": 3,
+                "decision_passed_to_total_ratio_threshold": 0.2,
+                "decision_minimum_hypotheses_threshold": 1,
+                "indirect_path_dominance_gap_threshold": 0.2,
+                "indirect_path_min_length": 3,
+                "indirect_path_max_length": 4
+            },
+            "signals": {
+                "positive_threshold": 1.0,
+                "negative_threshold": -1.0,
+                "reputation_positive_delta": 10,
+                "reputation_negative_delta": -20,
+                "weights": {
+                    "passed_hypothesis_count": 1.0,
+                    "mean_confidence": 0.8,
+                    "graph_density": 0.5,
+                    "filtered_to_total_ratio": 0.3
+                },
+                "max_deltas": {
+                    "passed_hypothesis_count": 100.0,
+                    "mean_confidence": 20.0,
+                    "graph_density": 0.2,
+                    "filtered_to_total_ratio": 0.5
+                }
+            },
+            "handlers": {
+                "clarification_use_llm": false
+            }
+        },
+        "query_config": {
+            "query_expansion_terms": [],
+            "query_penalty_terms": [],
+            "boost_keywords": [],
+            "penalty_keywords": [],
+            "signature_length": 64,
+            "initial_reputation": 0,
+            "reputation_exhaustion_decay": -5,
+            "max_reuse_attempts": 3,
+            "fetch_batch_size": 1,
+            "fetch_providers": "semantic_scholar",
+            "fetch_top_k_hypotheses": 1,
+            "fetch_min_reputation": -10,
+            "path_reasoning_seeds": [],
+            "path_reasoning_stoplist": []
+        }
+    }
+}

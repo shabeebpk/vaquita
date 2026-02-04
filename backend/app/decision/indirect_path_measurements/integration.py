@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Any, Optional
 
 from app.decision.indirect_path_measurements.indirect_paths import IndirectPathMeasurements
-from app.decision.indirect_path_measurements.config import get_indirect_path_config
+from app.decision.indirect_path_measurements.config import IndirectPathConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,26 +18,13 @@ def extend_measurements_with_indirect_paths(
     base_measurements: Dict[str, Any],
     hypotheses: List[Dict[str, Any]],
     previous_snapshot: Optional[Dict[str, Any]] = None,
+    config: Optional[IndirectPathConfig] = None,
 ) -> Dict[str, Any]:
     """
     Extend base measurements dict with indirect path measurements.
-    
-    Args:
-        base_measurements: Existing measurements dict (will be updated in-place)
-        hypotheses: List of hypothesis dicts (one per indirect path)
-        previous_snapshot: Optional previous DecisionResult.measurements_snapshot for temporal comparisons
-    
-    Returns:
-        Updated measurements dict (same object as base_measurements)
-    
-    Example:
-        # In decision.py or wherever measurements are computed:
-        measurements = {... existing measurements ...}
-        measurements = extend_measurements_with_indirect_paths(
-            measurements, hypotheses, previous=previous_snapshot
-        )
     """
-    config = get_indirect_path_config()
+    if config is None:
+        return base_measurements
     
     if not config.MEASUREMENTS_ENABLED:
         logger.debug("Indirect path measurements disabled, skipping extension")

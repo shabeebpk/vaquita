@@ -41,9 +41,15 @@ class AskUserInputHandler(Handler):
         Otherwise uses template-based generation.
         Loads prompts via the centralized prompt loader.
         """
-        # Check if LLM-based question generation is enabled
-        from app.config.system_settings import system_settings
-        use_llm = system_settings.CLARIFICATION_USE_LLM == 1
+        """
+        # Load job config to check if LLM is enabled
+        use_llm = False
+        with Session(engine) as session:
+             job = session.query(Job).filter(Job.id == job_id).first()
+             if job and job.job_config:
+                 expert_settings = job.job_config.get("expert_settings", {})
+                 handlers_config = expert_settings.get("handlers", {})
+                 use_llm = handlers_config.get("clarification_use_llm", False)
         
         if use_llm:
             try:

@@ -2,6 +2,7 @@
 import logging
 import os
 import uuid
+import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -26,12 +27,21 @@ async def unified_chat(
     with Session(engine) as session:
         # 1. Lazy Job Creation
         if job_id is None:
-            job = Job(status="CREATED")
+            # Load default job config
+            try:
+                config_path = os.path.join(os.path.dirname(__file__), "../config/default_job_config.json")
+                with open(config_path, "r") as f:
+                    default_config = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load default job configuration: {e}")
+                default_config = {}
+
+            job = Job(status="CREATED", job_config=default_config)
             session.add(job)
             session.flush()
             job_id = job.id
             session.commit()
-            logger.info(f"Lazy-created new job {job_id}")
+            logger.info(f"Lazy-created new job {job_id} with default configuration")
         else:
             job = session.query(Job).get(job_id)
             if not job:

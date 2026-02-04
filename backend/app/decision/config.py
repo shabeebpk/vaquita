@@ -12,86 +12,42 @@ logger = logging.getLogger(__name__)
 class DecisionConfig:
     """Loads and stores all decision logic thresholds from environment variables."""
     
-    def __init__(self):
-        """Initialize config from environment variables with safe defaults."""
-        from app.config.system_settings import system_settings
+    def __init__(self, job_config: dict = None):
+        """Initialize config from job configuration."""
+        job_config = job_config or {}
+        expert_settings = job_config.get("expert_settings", {})
+        heuristics = expert_settings.get("heuristics", {})
         
         # ===== Confidence Normalization =====
-        self.CONFIDENCE_NORMALIZATION_FACTOR = system_settings.DECISION_CONFIDENCE_NORM_FACTOR
+        self.CONFIDENCE_NORMALIZATION_FACTOR = int(heuristics.get("decision_confidence_norm_factor", 10))
         
         # ===== High Confidence Threshold =====
-        self.HIGH_CONFIDENCE_THRESHOLD = system_settings.DECISION_HIGH_CONFIDENCE_THRESHOLD
+        self.HIGH_CONFIDENCE_THRESHOLD = float(heuristics.get("decision_high_confidence_threshold", 0.7))
         
         # ===== Dominant Hypothesis Gap Ratio =====
-        self.DOMINANT_GAP_RATIO = system_settings.DECISION_DOMINANT_GAP_RATIO
+        self.DOMINANT_GAP_RATIO = float(heuristics.get("decision_dominant_gap_ratio", 0.3))
         
         # ===== Diversity Thresholds =====
-        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = system_settings.DECISION_LOW_DIVERSITY_PAIRS_THRESHOLD
-        
-        self.DIVERSITY_RATIO_THRESHOLD = system_settings.DECISION_DIVERSITY_RATIO_THRESHOLD
+        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = int(heuristics.get("decision_low_diversity_pairs_threshold", 2))
+        self.DIVERSITY_RATIO_THRESHOLD = float(heuristics.get("decision_diversity_ratio_threshold", 0.3))
         
         # ===== Graph Density Threshold =====
-        self.SPARSE_GRAPH_DENSITY_THRESHOLD = system_settings.DECISION_SPARSE_GRAPH_DENSITY_THRESHOLD
+        self.SPARSE_GRAPH_DENSITY_THRESHOLD = float(heuristics.get("decision_sparse_graph_density_threshold", 0.05))
         
         # ===== Path Support Threshold =====
-        self.PATH_SUPPORT_THRESHOLD = system_settings.DECISION_PATH_SUPPORT_THRESHOLD
+        self.PATH_SUPPORT_THRESHOLD = int(heuristics.get("decision_path_support_threshold", 2))
         
         # ===== Stability Cycle Threshold =====
-        self.STABILITY_CYCLE_THRESHOLD = system_settings.DECISION_STABILITY_CYCLE_THRESHOLD
+        self.STABILITY_CYCLE_THRESHOLD = int(heuristics.get("decision_stability_cycle_threshold", 3))
         
         # ===== Filtering Thresholds =====
-        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = system_settings.DECISION_PASSED_TO_TOTAL_RATIO_THRESHOLD
+        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = float(heuristics.get("decision_passed_to_total_ratio_threshold", 0.2))
         
         # ===== Minimum Viable Hypotheses =====
-        self.MINIMUM_HYPOTHESES_THRESHOLD = system_settings.DECISION_MINIMUM_HYPOTHESES_THRESHOLD
+        self.MINIMUM_HYPOTHESES_THRESHOLD = int(heuristics.get("decision_minimum_hypotheses_threshold", 1))
         
-        logger.info(
+        logger.debug(
             f"DecisionConfig initialized: "
             f"norm_factor={self.CONFIDENCE_NORMALIZATION_FACTOR}, "
-            f"high_conf={self.HIGH_CONFIDENCE_THRESHOLD}, "
-            f"gap_ratio={self.DOMINANT_GAP_RATIO}, "
-            f"low_diversity_pairs={self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD}, "
-            f"sparse_density={self.SPARSE_GRAPH_DENSITY_THRESHOLD}"
+            f"high_conf={self.HIGH_CONFIDENCE_THRESHOLD}"
         )
-    
-    @staticmethod
-    def _get_float_env(key: str, default: float, description: str = "") -> float:
-        """Load a float from environment, log it, return default if not set or invalid."""
-        val = os.getenv(key)
-        if val is None:
-            logger.debug(f"{key}={default} (default) — {description}")
-            return default
-        try:
-            f = float(val)
-            logger.info(f"{key}={f} (env) — {description}")
-            return f
-        except ValueError:
-            logger.warning(f"{key}={val} is not a valid float; using default={default}")
-            return default
-    
-    @staticmethod
-    def _get_int_env(key: str, default: int, description: str = "") -> int:
-        """Load an int from environment, log it, return default if not set or invalid."""
-        val = os.getenv(key)
-        if val is None:
-            logger.debug(f"{key}={default} (default) — {description}")
-            return default
-        try:
-            i = int(val)
-            logger.info(f"{key}={i} (env) — {description}")
-            return i
-        except ValueError:
-            logger.warning(f"{key}={val} is not a valid int; using default={default}")
-            return default
-
-
-# Global singleton instance
-_config = None
-
-
-def get_decision_config() -> DecisionConfig:
-    """Get or create the global DecisionConfig instance."""
-    global _config
-    if _config is None:
-        _config = DecisionConfig()
-    return _config

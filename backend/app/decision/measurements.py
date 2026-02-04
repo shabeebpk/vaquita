@@ -13,9 +13,12 @@ submodule for additional structural metrics (paths_per_pair, redundancy_score, e
 from typing import Dict, List, Any, Optional
 import logging
 
-from app.decision.config import get_decision_config
+from app.decision.config import DecisionConfig
 from app.decision.indirect_path_measurements.config import IndirectPathConfig
 from app.decision.indirect_path_measurements.integration import extend_measurements_with_indirect_paths
+from app.storage.models import Job
+from app.storage.db import engine
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -28,53 +31,26 @@ def compute_measurements(
 ) -> Dict[str, Any]:
     """
     Compute a dictionary of deterministic signals from artifacts.
-    
-    Separates hypothesis populations and applies statistics only to passed hypotheses.
-    Optionally extends measurements with indirect-path metrics if enabled via .env.
-    
-    Args:
-        semantic_graph: Phase-3 semantic graph dict (nodes, edges).
-        hypotheses: List of persisted hypothesis dicts (all explore + query results).
-        job_metadata: Job context (id, status, user_text, created_at, etc.).
-        previous_measurement_snapshot: Optional previous DecisionResult.measurements_snapshot for temporal measurements.
-    
-    Returns:
-        A measurements dict with keys:
-        - total_hypothesis_count: all hypotheses
-        - passed_hypothesis_count: where passed_filter == True
-        - rejected_hypothesis_count: where passed_filter == False
-        - filtered_to_total_ratio: passed / total
-        
-        (All statistical measures below are computed from passed hypotheses only)
-        - max_confidence: raw confidence (integer support count)
-        - mean_confidence: average raw confidence
-        - confidence_std: standard deviation
-        - max_normalized_confidence: confidence / NORM_FACTOR, clamped to [0,1]
-        - mean_normalized_confidence: average normalized confidence
-        - unique_source_target_pairs: from passed only
-        - diversity_score: ratio of unique nodes to total nodes
-        - is_dominant_clear: bool
-        - dominant_hypothesis_index: index in passed list
-        - has_any_viable_hypothesis: bool (total > 0)
-        
-        - graph_density: edges / max_possible_edges
-        - semantic_graph_node_count, semantic_graph_edge_count
-        - job_* metadata
-        
-        (If INDIRECT_PATH_MEASUREMENTS_ENABLED=true, also includes)
-        - max_paths_per_pair, mean_paths_per_pair, dominant_pair_path_ratio
-        - unique_intermediate_nodes_dominant, redundancy_score
-        - mean_path_length, path_length_variance
-        - pair_distribution_entropy
-        - evidence_growth_rate, hypothesis_stability, time_since_last_update (temporal placeholders)
-        - (and more, see app/decision/measurements/indirect_paths.py)
     """
     measurements = {}
     
-    # ===== Initialize indirect path config =====
-    # Load config from environment on first call
-    IndirectPathConfig.load_from_env()
+    # Load Configuration from Job
+    job_id = job_metadata.get("id")
+    decision_config = None
+    indirect_config = None
     
+    if job_id:
+        with Session(engine) as session:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if job and job.job_config:
+                decision_config = DecisionConfig(job.job_config)
+                indirect_config = IndirectPathConfig(job.job_config)
+    
+    if not decision_config:
+        decision_config = DecisionConfig() # Defaults
+    if not indirect_config:
+        indirect_config = IndirectPathConfig() # Defaults
+
     # ===== Split hypothesis populations =====
     total_hypotheses = hypotheses  # all rows
     passed_hypotheses = [h for h in hypotheses if h.get("passed_filter", False)]
@@ -95,15 +71,13 @@ def compute_measurements(
     
     
     # ===== Statistics computed ONLY from passed hypotheses =====
-    config = get_decision_config()
     
     if passed_hypotheses:
         # Raw confidence (integer support counts)
         confidences = [h.get("confidence", 0) for h in passed_hypotheses]
         # Normalized confidence (0-1 range)
-        # normalized = min(raw_confidence / NORMALIZATION_FACTOR, 1.0)
         normalized_confidences = [
-            min(c / config.CONFIDENCE_NORMALIZATION_FACTOR, 1.0) for c in confidences
+            min(c / decision_config.CONFIDENCE_NORMALIZATION_FACTOR, 1.0) for c in confidences
         ]
         measurements["max_normalized_confidence"] = max(normalized_confidences) if normalized_confidences else 0.0
         measurements["mean_normalized_confidence"] = (
@@ -135,7 +109,7 @@ def compute_measurements(
             gap = first_conf - second_conf
             # "Clear dominant" if gap > (gap_ratio * first_confidence)
             measurements["is_dominant_clear"] = (
-                gap > config.DOMINANT_GAP_RATIO * first_conf if first_conf > 0 else False
+                gap > decision_config.DOMINANT_GAP_RATIO * first_conf if first_conf > 0 else False
             )
         else:
             measurements["is_dominant_clear"] = len(passed_hypotheses) > 0
@@ -174,6 +148,7 @@ def compute_measurements(
         measurements,
         hypotheses,
         previous_snapshot=previous_measurement_snapshot,
+        config=indirect_config,
     )
     
     return measurements

@@ -59,6 +59,10 @@ class Job(Base):
     id = Column(Integer, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(String, nullable=True)  # e.g., "in_progress", "completed", "error"
+    
+    # Configuration
+    job_config = Column(JSONB, nullable=False, server_default='{}')  # Full configuration snapshot
+    domain = Column(String, nullable=True)  # Override domain
 
 
 class ConversationMessage(Base):

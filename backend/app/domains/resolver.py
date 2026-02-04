@@ -18,32 +18,31 @@ logger = logging.getLogger(__name__)
 
 
 class DomainResolverConfig:
-    """Configuration for domain resolution behavior."""
-    
-    def __init__(self):
-        from app.config.system_settings import system_settings
+    def __init__(self, job_config: dict = None, allowed_domains: list = None):
+        """
+        Initialize config from job configuration and global reference data.
         
-        # Deterministic confidence threshold (0.0-1.0)
-        self.deterministic_threshold = system_settings.DOMAIN_DETERMINISTIC_THRESHOLD
+        Args:
+            job_config: Mutable job configuration (thresholds)
+            allowed_domains: Immutable list of domain definitions from default_job_config.json
+        """
+        job_config = job_config or {}
+        allowed_domains = allowed_domains or []
         
-        # LLM confidence threshold for accepting LLM classification
-        self.llm_threshold = system_settings.DOMAIN_LLM_THRESHOLD
+        expert_settings = job_config.get("expert_settings", {})
+        res_config = expert_settings.get("domain_resolution", {})
         
-        # Available domain labels (comma-separated)
-        domain_labels = system_settings.DOMAIN_LABELS
-        self.domain_labels = [d.strip() for d in domain_labels.split(",")]
+        # Thresholds from job config
+        self.deterministic_threshold = float(res_config.get("deterministic_threshold", 0.7))
+        self.llm_threshold = float(res_config.get("llm_threshold", 0.6))
         
-        # Keyword mappings for deterministic detection (JSON)
-        keywords_json = system_settings.DOMAIN_KEYWORDS
-        try:
-            self.domain_keywords = json.loads(keywords_json)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse DOMAIN_KEYWORDS JSON, using empty dict")
-            self.domain_keywords = {}
+        # Domain definitions from global reference
+        self.domain_labels = [d["name"] for d in allowed_domains]
+        self.domain_keywords = {d["name"]: d["keywords"] for d in allowed_domains}
         
-        logger.info(
+        logger.debug(
             f"DomainResolverConfig: threshold={self.deterministic_threshold}, "
-            f"domains={self.domain_labels}, llm_threshold={self.llm_threshold}"
+            f"domains={len(self.domain_labels)}, llm_threshold={self.llm_threshold}"
         )
 
 

@@ -10,9 +10,12 @@ import logging
 import os
 
 from app.decision.space import Decision, all_decisions
-from app.decision.config import get_decision_config
+from app.decision.config import DecisionConfig
 from app.llm import get_llm_service
 from app.prompts.loader import load_prompt
+from app.storage.db import engine
+from app.storage.models import Job
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +29,6 @@ class DecisionProvider(ABC):
     
     @abstractmethod
     def decide(self, measurements: Dict[str, Any], context: Dict[str, Any]) -> Decision:
-        """
-        Make a decision based on measurements and context.
-        
-        Args:
-            measurements: Dictionary of signals computed by measurements layer.
-            context: Additional context (job_id, semantic_graph, hypotheses, etc.).
-        
-        Returns:
-            A Decision enum value.
-        """
         pass
 
 
@@ -44,39 +37,37 @@ class RuleBasedDecisionProvider(DecisionProvider):
     Deterministic rule-based decision provider.
     
     Uses explicit if-else rules over measurements to select a decision.
-    This is the default, always-available, LLM-free provider.
-    All thresholds are loaded from DecisionConfig (environment-configurable).
+    All thresholds are loaded from DecisionConfig (per-job).
     """
     
     def __init__(self):
-        """Initialize provider and load config thresholds."""
-        self.config = get_decision_config()
-        logger.info("RuleBasedDecisionProvider initialized with DecisionConfig")
+        """Initialize provider."""
+        logger.info("RuleBasedDecisionProvider initialized")
     
     def decide(self, measurements: Dict[str, Any], context: Dict[str, Any]) -> Decision:
         """
         Apply deterministic rules to select a decision.
-        
-        Terminal decisions (checked in strict order):
-        1. If total hypotheses < MIN_HYPOTHESES_THRESHOLD → INSUFFICIENT_SIGNAL
-        2. If no passed hypotheses → INSUFFICIENT_SIGNAL
-        3. HALT_CONFIDENT: no direct edge X→Y AND max_paths_per_pair >= PATH_SUPPORT_THRESHOLD 
-                           AND is_dominant_clear == true AND max_normalized_confidence >= HIGH_CONFIDENCE_THRESHOLD
-        4. HALT_NO_HYPOTHESIS: no direct edge AND evidence_growth_rate ≈ 0 for configured cycles
-                               AND max_paths_per_pair < PATH_SUPPORT_THRESHOLD AND graph stable
-        
-        Non-terminal decisions (if no terminal decision matched):
-        5. If unique_pairs < LOW_DIVERSITY_PAIRS_THRESHOLD → ASK_DOMAIN_EXPERT
-        6. If graph_density < SPARSE_DENSITY_THRESHOLD → FETCH_MORE_LITERATURE
-        7. Default → ASK_USER_INPUT
         """
+        # Load config from job context
+        job_id = context.get("job_id")
+        config = None
+        
+        if job_id:
+             with Session(engine) as session:
+                 job = session.query(Job).filter(Job.id == job_id).first()
+                 if job and job.job_config:
+                     config = DecisionConfig(job.job_config)
+        
+        if not config:
+            config = DecisionConfig()  # defaults
+            
         total_count = measurements.get("total_hypothesis_count", 0)
         passed_count = measurements.get("passed_hypothesis_count", 0)
         
         # Rule 1: Minimum threshold not met
-        if total_count < self.config.MINIMUM_HYPOTHESES_THRESHOLD:
+        if total_count < config.MINIMUM_HYPOTHESES_THRESHOLD:
             logger.info(
-                f"Total hypotheses {total_count} < threshold {self.config.MINIMUM_HYPOTHESES_THRESHOLD}: "
+                f"Total hypotheses {total_count} < threshold {config.MINIMUM_HYPOTHESES_THRESHOLD}: "
                 f"returning INSUFFICIENT_SIGNAL"
             )
             return Decision.INSUFFICIENT_SIGNAL
@@ -101,13 +92,13 @@ class RuleBasedDecisionProvider(DecisionProvider):
         # Rule 3: HALT_CONFIDENT (strict conditions)
         # Only when: no direct edge, sufficient path support, clear dominance, high confidence
         if has_indirect_paths and \
-           max_paths_per_pair >= self.config.PATH_SUPPORT_THRESHOLD and \
+           max_paths_per_pair >= config.PATH_SUPPORT_THRESHOLD and \
            is_dominant and \
-           max_norm_conf >= self.config.HIGH_CONFIDENCE_THRESHOLD:
+           max_norm_conf >= config.HIGH_CONFIDENCE_THRESHOLD:
             logger.info(
                 f"Halt confident: indirect paths={has_indirect_paths}, "
-                f"paths_per_pair={max_paths_per_pair} >= {self.config.PATH_SUPPORT_THRESHOLD}, "
-                f"dominant={is_dominant}, confidence={max_norm_conf:.2f} >= {self.config.HIGH_CONFIDENCE_THRESHOLD}: "
+                f"paths_per_pair={max_paths_per_pair} >= {config.PATH_SUPPORT_THRESHOLD}, "
+                f"dominant={is_dominant}, confidence={max_norm_conf:.2f} >= {config.HIGH_CONFIDENCE_THRESHOLD}: "
                 f"returning HALT_CONFIDENT"
             )
             return Decision.HALT_CONFIDENT
@@ -120,12 +111,12 @@ class RuleBasedDecisionProvider(DecisionProvider):
         
         if has_indirect_paths and \
            growth_is_minimal and \
-           max_paths_per_pair < self.config.PATH_SUPPORT_THRESHOLD and \
+           max_paths_per_pair < config.PATH_SUPPORT_THRESHOLD and \
            is_stable:
             logger.info(
                 f"Halt no hypothesis: indirect paths={has_indirect_paths}, "
                 f"growth_rate={evidence_growth_rate:.2f} ≈ 0, "
-                f"paths_per_pair={max_paths_per_pair} < {self.config.PATH_SUPPORT_THRESHOLD}, "
+                f"paths_per_pair={max_paths_per_pair} < {config.PATH_SUPPORT_THRESHOLD}, "
                 f"stable=(density={graph_density:.4f}, diversity={diversity_score:.2f}): "
                 f"returning HALT_NO_HYPOTHESIS"
             )
@@ -134,8 +125,8 @@ class RuleBasedDecisionProvider(DecisionProvider):
         # Non-terminal decisions (proceed with normal flow)
         # Rule 5: Low diversity (check both unique pairs and diversity ratio)
         unique_pairs = measurements.get("unique_source_target_pairs", 0)
-        if unique_pairs < self.config.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD or \
-           diversity_score < self.config.DIVERSITY_RATIO_THRESHOLD:
+        if unique_pairs < config.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD or \
+           diversity_score < config.DIVERSITY_RATIO_THRESHOLD:
             logger.info(
                 f"Low diversity (unique_pairs={unique_pairs}, diversity_score={diversity_score:.2f}): "
                 f"returning ASK_DOMAIN_EXPERT"
@@ -143,9 +134,9 @@ class RuleBasedDecisionProvider(DecisionProvider):
             return Decision.ASK_DOMAIN_EXPERT
         
         # Rule 6: Sparse hypothesis graph
-        if graph_density < self.config.SPARSE_GRAPH_DENSITY_THRESHOLD:
+        if graph_density < config.SPARSE_GRAPH_DENSITY_THRESHOLD:
             logger.info(
-                f"Sparse graph (density={graph_density:.4f} < {self.config.SPARSE_GRAPH_DENSITY_THRESHOLD}): "
+                f"Sparse graph (density={graph_density:.4f} < {config.SPARSE_GRAPH_DENSITY_THRESHOLD}): "
                 f"returning FETCH_MORE_LITERATURE"
             )
             return Decision.FETCH_MORE_LITERATURE
