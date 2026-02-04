@@ -22,24 +22,21 @@ class ProviderConfig:
     
     def __init__(self):
         from app.config.system_settings import system_settings
+        """Initialize the base provider with configuration from AdminPolicy."""
+        from app.config.admin_policy import admin_policy
         
-        # Batch size: max papers per provider call for one SearchQuery
-        self.batch_size = system_settings.FETCH_BATCH_SIZE
+        fp = admin_policy.query_orchestrator.fetch_params
+        self.timeout = fp.timeout_seconds
+        self.results_limit = fp.results_limit
+        self.retry_attempts = fp.retry_attempts
         
-        # List of enabled providers (comma-separated)
-        providers_str = system_settings.FETCH_PROVIDERS
-        self.enabled_providers = [p.strip() for p in providers_str.split(",")]
-        
-        # Provider timeout in seconds
-        self.timeout = system_settings.FETCH_TIMEOUT_SECONDS
-        
-        # Retry configuration
-        self.retry_attempts = system_settings.FETCH_RETRY_ATTEMPTS
+        # Note: enabled_providers is now managed by the orchestrator, not individual ProviderConfig
+        # For backward compatibility with existing PaperProvider, we'll map results_limit to batch_size
+        self.batch_size = self.results_limit 
         
         logger.info(
-            f"ProviderConfig: batch_size={self.batch_size}, "
-            f"enabled={self.enabled_providers}, "
-            f"timeout={self.timeout}s, retries={self.retry_attempts}"
+            f"ProviderConfig initialized: "
+            f"timeout={self.timeout}s, results_limit={self.results_limit}, retries={self.retry_attempts}"
         )
 
 

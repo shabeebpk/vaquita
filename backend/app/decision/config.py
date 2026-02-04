@@ -1,53 +1,58 @@
 """Configuration for Decision & Control phase thresholds.
 
-All hardcoded numeric thresholds are centralized here and can be overridden
-via environment variables for tuning without code changes.
+All decision thresholds are now loaded from AdminPolicy (global admin layer).
+This config class provides a bridge for backward compatibility if needed.
 """
-import os
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class DecisionConfig:
-    """Loads and stores all decision logic thresholds from environment variables."""
+    """Loads decision logic thresholds from AdminPolicy."""
     
     def __init__(self, job_config: dict = None):
-        """Initialize config from job configuration."""
-        job_config = job_config or {}
-        algo_params = job_config.get("algorithm_params", {})
-        heuristics = algo_params.get("heuristics", {})
+        """
+        Initialize config from AdminPolicy.
+        
+        Args:
+            job_config: Deprecated, kept for backward compatibility.
+        """
+        from app.config.admin_policy import admin_policy
+        
+        # Read ALL thresholds from AdminPolicy
+        dt = admin_policy.algorithm.decision_thresholds
         
         # ===== Confidence Normalization =====
-        self.CONFIDENCE_NORMALIZATION_FACTOR = int(heuristics.get("decision_confidence_norm_factor", 10))
+        self.CONFIDENCE_NORMALIZATION_FACTOR = dt.confidence_norm_factor
         
         # ===== High Confidence Threshold =====
-        self.HIGH_CONFIDENCE_THRESHOLD = float(heuristics.get("decision_high_confidence_threshold", 0.7))
+        self.HIGH_CONFIDENCE_THRESHOLD = dt.high_confidence_threshold
         
         # ===== Dominant Hypothesis Gap Ratio =====
-        self.DOMINANT_GAP_RATIO = float(heuristics.get("decision_dominant_gap_ratio", 0.3))
+        self.DOMINANT_GAP_RATIO = dt.dominant_gap_ratio
         
         # ===== Diversity Thresholds =====
-        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = int(heuristics.get("decision_low_diversity_pairs_threshold", 2))
-        self.DIVERSITY_RATIO_THRESHOLD = float(heuristics.get("decision_diversity_ratio_threshold", 0.3))
+        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = dt.low_diversity_pairs_threshold
+        self.DIVERSITY_RATIO_THRESHOLD = dt.diversity_ratio_threshold
         
         # ===== Graph Density Threshold =====
-        self.SPARSE_GRAPH_DENSITY_THRESHOLD = float(heuristics.get("decision_sparse_graph_density_threshold", 0.05))
+        self.SPARSE_GRAPH_DENSITY_THRESHOLD = dt.sparse_graph_density_threshold
         
         # ===== Path Support Threshold =====
-        self.PATH_SUPPORT_THRESHOLD = int(heuristics.get("decision_path_support_threshold", 2))
+        self.PATH_SUPPORT_THRESHOLD = dt.path_support_threshold
         
         # ===== Stability Cycle Threshold =====
-        self.STABILITY_CYCLE_THRESHOLD = int(heuristics.get("decision_stability_cycle_threshold", 3))
+        self.STABILITY_CYCLE_THRESHOLD = dt.stability_cycle_threshold
         
         # ===== Filtering Thresholds =====
-        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = float(heuristics.get("decision_passed_to_total_ratio_threshold", 0.2))
+        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = dt.passed_to_total_ratio_threshold
         
         # ===== Minimum Viable Hypotheses =====
-        self.MINIMUM_HYPOTHESES_THRESHOLD = int(heuristics.get("decision_minimum_hypotheses_threshold", 1))
+        self.MINIMUM_HYPOTHESES_THRESHOLD = dt.minimum_hypotheses_threshold
         
         logger.debug(
-            f"DecisionConfig initialized: "
+            f"DecisionConfig loaded from AdminPolicy: "
             f"norm_factor={self.CONFIDENCE_NORMALIZATION_FACTOR}, "
             f"high_conf={self.HIGH_CONFIDENCE_THRESHOLD}"
         )

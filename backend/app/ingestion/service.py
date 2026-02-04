@@ -87,17 +87,18 @@ class IngestionService:
                     "Caller must ensure job is in correct state before invoking ingestion."
                 )
             
-            # Load defaults from job_config if not provided
-            ingest_config = job.job_config.get("algorithm_params", {}).get("ingestion", {})
+            # Load defaults from AdminPolicy if not provided
+            from app.config.admin_policy import admin_policy
+            ing_defaults = admin_policy.algorithm.ingestion_defaults
             
             if segmentation_kwargs is None:
                 segmentation_kwargs = {
-                    "sentences_per_block": int(ingest_config.get("sentences_per_block", 3))
+                    "sentences_per_block": int(ing_defaults.sentences_per_block)
                 }
             
             if normalization_kwargs is None:
                 normalization_kwargs = {
-                    "apply_lexical_repair": bool(ingest_config.get("enable_lexical_repair", False))
+                    "apply_lexical_repair": bool(ing_defaults.enable_lexical_repair)
                 }
 
             sources_processed = 0

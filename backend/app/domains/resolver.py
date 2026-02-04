@@ -20,38 +20,26 @@ logger = logging.getLogger(__name__)
 class DomainResolverConfig:
     def __init__(self, job_config: dict = None, allowed_domains: list = None):
         """
-        Initialize config from job configuration and global reference data.
+        Initialize config from AdminPolicy.
         
         Args:
-            job_config: Mutable job configuration (thresholds)
-            allowed_domains: Immutable list of domain definitions from default_job_config.json
+            job_config: Deprecated, kept for backward compatibility.
+            allowed_domains: Deprecated, loaded from AdminPolicy instead.
         """
-        job_config = job_config or {}
-        allowed_domains = allowed_domains or []
+        from app.config.admin_policy import admin_policy
         
-        expert_settings = job_config.get("expert_settings", {})
-        # heuristic definitions moved to algorithm_params in refactor
-        # check both locations for backward compatibility during migration if needed, 
-        # but prefer algorithm_params as per new spec.
+        # Load thresholds from AdminPolicy
+        dr = admin_policy.algorithm.domain_resolution
+        self.deterministic_threshold = float(dr.deterministic_threshold)
+        self.llm_threshold = float(dr.llm_threshold)
         
-        algo_params = job_config.get("algorithm_params", {})
-        res_config = algo_params.get("domain_resolution", {})
-        
-        # Fallback to expert_settings if not in algo_params (transition safety?) 
-        # No, prompt says "must live at the top level... under a new section". 
-        # "Any logic... must read exclusively from job.job_config".
-        # I will strictly read from algorithm_params as the source of truth for thresholds.
-        
-        # Thresholds from job config
-        self.deterministic_threshold = float(res_config.get("deterministic_threshold", 0.7))
-        self.llm_threshold = float(res_config.get("llm_threshold", 0.6))
-        
-        # Domain definitions from global reference
-        self.domain_labels = [d["name"] for d in allowed_domains]
-        self.domain_keywords = {d["name"]: d["keywords"] for d in allowed_domains}
+        # Load domain definitions from AdminPolicy
+        self.domain_labels = [d.name for d in admin_policy.allowed_domains]
+        self.domain_keywords = {d.name: d.keywords for d in admin_policy.allowed_domains}
         
         logger.debug(
-            f"DomainResolverConfig: threshold={self.deterministic_threshold}, "
+            f"DomainResolverConfig loaded from AdminPolicy: "
+            f"threshold={self.deterministic_threshold}, "
             f"domains={len(self.domain_labels)}, llm_threshold={self.llm_threshold}"
         )
 
@@ -197,20 +185,7 @@ def llm_domain_resolution(
     # Load prompt template from SystemSettings
     from app.config.system_settings import system_settings
     prompt_file = system_settings.DOMAIN_RESOLVER_PROMPT_FILE
-    template = load_prompt(prompt_file)
-    
-    if not template:
-        # Fallback template if file not found
-        template = """Classify the following scientific hypothesis into ONE domain.
-
-Hypothesis:
-- Source: {source}
-- Target: {target}
-- Explanation: {explanation}
-
-Domains: {domains}
-
-Respond with ONLY the domain name, nothing else."""
+    template = load_prompt(prompt_file, fallback="Classify hypothesis: {source} -> {target}. Domains: {domains}")
     
     prompt = template.format(source=source, target=target, explanation=explanation, domains=domains_str)
     

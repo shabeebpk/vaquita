@@ -24,22 +24,23 @@ class SystemSettings(BaseSettings):
     NVIDIA_API_KEY: Optional[str] = Field(None, env="NVIDIA_API_KEY")
     OPENAI_API_KEY: Optional[str] = Field(None, env="OPENAI_API_KEY")
     
-    # Hard System Safety Caps
-    # Hard System Safety Caps
-    FETCH_RESULTS_LIMIT: int = Field(10, env="FETCH_RESULTS_LIMIT")
-    FETCH_TIMEOUT_SECONDS: int = Field(30, env="FETCH_TIMEOUT_SECONDS")
-    FETCH_RETRY_ATTEMPTS: int = Field(3, env="FETCH_RETRY_ATTEMPTS")
     
     # New Safety Caps
     SYSTEM_MAX_PAPERS_PER_JOB: int = Field(100, env="SYSTEM_MAX_PAPERS_PER_JOB")
     SYSTEM_MAX_FETCH_CYCLES: int = Field(5, env="SYSTEM_MAX_FETCH_CYCLES")
     SYSTEM_MAX_GRAPH_SIZE: int = Field(5000, env="SYSTEM_MAX_GRAPH_SIZE")
     
+    
     # Prompt Files (System Assets)
     DOMAIN_RESOLVER_PROMPT_FILE: str = Field("domain_resolver.txt", env="DOMAIN_RESOLVER_PROMPT_FILE")
-    
-    # Decision
-    DECISION_PROVIDER: str = Field("rule_based", env="DECISION_PROVIDER")
+    TRIPLE_EXTRACTION_PROMPT_FILE: str = Field("triple_extraction.txt", env="TRIPLE_EXTRACTION_PROMPT_FILE")
+    DECISION_LLM_PROMPT_FILE: str = Field("decision_llm.txt", env="DECISION_LLM_PROMPT_FILE")
+    CLARIFICATION_PROMPT_FILE: str = Field("clarification_question.txt", env="CLARIFICATION_PROMPT_FILE")
+    USER_CLASSIFIER_PROMPT_FILE: str = Field("user_text_classifier.txt", env="USER_CLASSIFIER_PROMPT_FILE")
+    CLARIFICATION_HIGH_PROMPT_FILE: str = Field("clarification_high_ambiguity.txt", env="CLARIFICATION_HIGH_PROMPT_FILE")
+    CLARIFICATION_MEDIUM_PROMPT_FILE: str = Field("clarification_medium_ambiguity.txt", env="CLARIFICATION_MEDIUM_PROMPT_FILE")
+    CLARIFICATION_LOW_PROMPT_FILE: str = Field("clarification_low_ambiguity.txt", env="CLARIFICATION_LOW_PROMPT_FILE")
+
 
     class Config:
         env_file = ".env"

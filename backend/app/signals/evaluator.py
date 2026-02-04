@@ -20,39 +20,43 @@ class SignalConfig:
     """Configuration for signal computation."""
     
     def __init__(self, job_config: dict = None):
-        """Initialize config from job configuration."""
-        job_config = job_config or {}
-        algo_params = job_config.get("algorithm_params", {})
-        signals_config = algo_params.get("signals", {})
+        """
+        Initialize config from AdminPolicy.
+        
+        Args:
+            job_config: Deprecated, kept for backward compatibility.
+        """
+        from app.config.admin_policy import admin_policy
+        
+        sp = admin_policy.algorithm.signal_params
         
         # Thresholds for signal classification
-        self.positive_threshold = float(signals_config.get("positive_threshold", 1.0))
-        self.negative_threshold = float(signals_config.get("negative_threshold", -1.0))
+        self.positive_threshold = float(sp.positive_threshold)
+        self.negative_threshold = float(sp.negative_threshold)
         
         # Reputation adjustments
-        self.reputation_on_positive = int(signals_config.get("reputation_positive_delta", 10))
-        self.reputation_on_negative = int(signals_config.get("reputation_negative_delta", -20))
+        self.reputation_on_positive = int(sp.reputation_positive_delta)
+        self.reputation_on_negative = int(sp.reputation_negative_delta)
         
         # Measurement weights for delta computation
-        weights = signals_config.get("weights", {})
         self.measurement_weights = {
-            "passed_hypothesis_count": float(weights.get("passed_hypothesis_count", 1.0)),
-            "mean_confidence": float(weights.get("mean_confidence", 0.8)),
-            "graph_density": float(weights.get("graph_density", 0.5)),
-            "filtered_to_total_ratio": float(weights.get("filtered_to_total_ratio", 0.3)),
+            "passed_hypothesis_count": float(sp.weights.passed_hypothesis_count),
+            "mean_confidence": float(sp.weights.mean_confidence),
+            "graph_density": float(sp.weights.graph_density),
+            "filtered_to_total_ratio": float(sp.weights.filtered_to_total_ratio),
         }
         
         # Normalization: max expected delta per measurement
-        max_deltas = signals_config.get("max_deltas", {})
         self.measurement_max_deltas = {
-            "passed_hypothesis_count": float(max_deltas.get("passed_hypothesis_count", 100.0)),
-            "mean_confidence": float(max_deltas.get("mean_confidence", 20.0)),
-            "graph_density": float(max_deltas.get("graph_density", 0.2)),
-            "filtered_to_total_ratio": float(max_deltas.get("filtered_to_total_ratio", 0.5)),
+            "passed_hypothesis_count": float(sp.max_deltas.passed_hypothesis_count),
+            "mean_confidence": float(sp.max_deltas.mean_confidence),
+            "graph_density": float(sp.max_deltas.graph_density),
+            "filtered_to_total_ratio": float(sp.max_deltas.filtered_to_total_ratio),
         }
         
         logger.debug(
-            f"SignalConfig: positive_threshold={self.positive_threshold}, "
+            f"SignalConfig loaded from AdminPolicy: "
+            f"positive_threshold={self.positive_threshold}, "
             f"negative_threshold={self.negative_threshold}, "
             f"rep_positive={self.reputation_on_positive}, rep_negative={self.reputation_on_negative}"
         )

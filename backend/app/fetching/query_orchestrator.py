@@ -23,24 +23,31 @@ class QueryOrchestratorConfig:
     """Configuration for query orchestration."""
     
     def __init__(self, job_config: dict = None):
-        """Initialize config from job configuration."""
-        job_config = job_config or {}
-        query_config = job_config.get("query_config", {})
+        """
+        Initialize config from AdminPolicy.
+        
+        Args:
+            job_config: Deprecated, kept for backward compatibility.
+        """
+        from app.config.admin_policy import admin_policy
+        
+        qo = admin_policy.query_orchestrator
         
         # Max signature length for hypothesis_signature
-        self.signature_length = int(query_config.get("signature_length", 64))
+        self.signature_length = int(qo.signature_length)
         
         # Initial reputation score for new queries
-        self.initial_reputation = int(query_config.get("initial_reputation", 0))
+        self.initial_reputation = int(qo.initial_reputation)
         
         # Reputation decay per exhaustion
-        self.reputation_exhaustion_decay = int(query_config.get("reputation_exhaustion_decay", -5))
+        self.reputation_exhaustion_decay = int(qo.exhaustion_decay)
         
         # Max reuse attempts for a single query before marking exhausted
-        self.max_reuse_attempts = int(query_config.get("max_reuse_attempts", 3))
+        self.max_reuse_attempts = int(qo.max_reuse_attempts)
         
         logger.debug(
-            f"QueryOrchestratorConfig: signature_len={self.signature_length}, "
+            f"QueryOrchestratorConfig loaded from AdminPolicy: "
+            f"signature_len={self.signature_length}, "
             f"initial_rep={self.initial_reputation}, max_reuse={self.max_reuse_attempts}"
         )
 

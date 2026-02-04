@@ -1,0 +1,138 @@
+{
+    "allowed_domains": [
+        {
+            "name": "biomedical",
+            "keywords": [
+                "protein",
+                "gene",
+                "cell",
+                "clinical",
+                "disease",
+                "drug",
+                "therapy"
+            ],
+            "provider": "semantic_scholar"
+        },
+        {
+            "name": "computer_science",
+            "keywords": [
+                "algorithm",
+                "network",
+                "software",
+                "data",
+                "learning",
+                "compute"
+            ],
+            "provider": "semantic_scholar"
+        },
+        {
+            "name": "physics",
+            "keywords": [
+                "energy",
+                "quantum",
+                "particle",
+                "force",
+                "matter",
+                "wave"
+            ],
+            "provider": "semantic_scholar"
+        },
+        {
+            "name": "chemistry",
+            "keywords": [
+                "molecule",
+                "reaction",
+                "bond",
+                "catalyst",
+                "synthesis"
+            ],
+            "provider": "semantic_scholar"
+        },
+        {
+            "name": "mathematics",
+            "keywords": [
+                "theorem",
+                "proof",
+                "equation",
+                "logic",
+                "topology",
+                "algebra"
+            ],
+            "provider": "semantic_scholar"
+        },
+        {
+            "name": "engineering",
+            "keywords": [
+                "design",
+                "system",
+                "control",
+                "material",
+                "process",
+                "mechanical"
+            ],
+            "provider": "semantic_scholar"
+        }
+    ],
+    "algorithm": {
+        "decision_thresholds": {
+            "confidence_norm_factor": 10,
+            "high_confidence_threshold": 0.7,
+            "dominant_gap_ratio": 0.3,
+            "low_diversity_pairs_threshold": 2,
+            "diversity_ratio_threshold": 0.3,
+            "sparse_graph_density_threshold": 0.05,
+            "path_support_threshold": 2,
+            "stability_cycle_threshold": 3,
+            "passed_to_total_ratio_threshold": 0.2,
+            "minimum_hypotheses_threshold": 1
+        },
+        "signal_params": {
+            "positive_threshold": 1.0,
+            "negative_threshold": -1.0,
+            "reputation_positive_delta": 10,
+            "reputation_negative_delta": -20,
+            "weights": {
+                "passed_hypothesis_count": 1.0,
+                "mean_confidence": 0.8,
+                "graph_density": 0.5,
+                "filtered_to_total_ratio": 0.3
+            },
+            "max_deltas": {
+                "passed_hypothesis_count": 100.0,
+                "mean_confidence": 20.0,
+                "graph_density": 0.2,
+                "filtered_to_total_ratio": 0.5
+            }
+        },
+        "ingestion_defaults": {
+            "segmentation_strategy": "sentences",
+            "sentences_per_block": 3,
+            "enable_lexical_repair": false
+        },
+        "domain_resolution": {
+            "deterministic_threshold": 0.7,
+            "llm_threshold": 0.6
+        },
+        "indirect_path": {
+            "dominance_gap_threshold": 0.2,
+            "min_length": 3,
+            "max_length": 4
+        }
+    },
+    "query_orchestrator": {
+        "signature_length": 64,
+        "initial_reputation": 0,
+        "exhaustion_decay": -5,
+        "max_reuse_attempts": 3,
+        "fetch_batch_size": 1,
+        "fetch_providers": "semantic_scholar",
+        "top_k_hypotheses": 1,
+        "min_reputation": -10,
+        "fetch_params": {
+            "results_limit": 10,
+            "timeout_seconds": 30,
+            "retry_attempts": 3
+        }
+    },
+    "decision_provider": "rule_based"
+}

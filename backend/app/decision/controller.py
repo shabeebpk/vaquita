@@ -165,15 +165,15 @@ class DecisionController:
 def get_decision_controller(provider_override: Optional[str] = None) -> DecisionController:
     """Factory function to instantiate a DecisionController.
     
-    Uses DECISION_PROVIDER env var, or override parameter, or defaults to "rule_based".
+    Uses AdminPolicy decision_provider, or override parameter.
     
     Args:
-        provider_override: If provided, overrides environment variable.
+        provider_override: If provided, overrides AdminPolicy setting.
     
     Returns:
         An initialized DecisionController.
     """
-    from app.config.system_settings import system_settings
+    from app.config.admin_policy import admin_policy
     
-    provider = provider_override or system_settings.DECISION_PROVIDER
+    provider = provider_override or admin_policy.decision_provider
     return DecisionController(provider_name=provider)

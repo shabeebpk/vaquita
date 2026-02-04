@@ -54,8 +54,9 @@ class AskUserInputHandler(Handler):
         if use_llm:
             try:
                 # Load prompt template using centralized loader
+                from app.config.system_settings import system_settings
                 prompt_template = load_prompt(
-                    "clarification_question.txt",
+                    system_settings.CLARIFICATION_PROMPT_FILE,
                     fallback=CLARIFICATION_FALLBACK
                 )
                 
@@ -80,14 +81,15 @@ class AskUserInputHandler(Handler):
                 logger.warning(f"LLM question generation failed for job {job_id}; falling back to template: {e}")
         
         # Template-based fallback
+        from app.config.system_settings import system_settings
         ambiguity_score = measurements.get("ambiguity_score", 0.0)
         
         if ambiguity_score > 0.7:
-            return "Could you clarify what specific aspect or relationship you're most interested in exploring?"
+            return load_prompt(system_settings.CLARIFICATION_HIGH_PROMPT_FILE)
         elif ambiguity_score > 0.5:
-            return "Are there any specific keywords or concepts you'd like me to focus on?"
+            return load_prompt(system_settings.CLARIFICATION_MEDIUM_PROMPT_FILE)
         else:
-            return "Would you like to provide additional context or documents to refine the analysis?"
+            return load_prompt(system_settings.CLARIFICATION_LOW_PROMPT_FILE)
     
     def handle(
         self,

@@ -45,17 +45,25 @@ class FetchServiceConfig:
     """Configuration for fetch service."""
     
     def __init__(self, job_config: dict = None):
-        job_config = job_config or {}
-        query_config = job_config.get("query_config", {})
+        """
+        Initialize config from AdminPolicy.
+        
+        Args:
+            job_config: Deprecated, kept for backward compatibility.
+        """
+        from app.config.admin_policy import admin_policy
+        
+        qo = admin_policy.query_orchestrator
         
         # Max hypotheses to fetch for in one FETCH_MORE cycle
-        self.top_k_hypotheses = int(query_config.get("fetch_top_k_hypotheses", 1))
+        self.top_k_hypotheses = int(qo.top_k_hypotheses)
         
         # Min reputation to consider hypothesis for fetch
-        self.min_reputation_for_fetch = int(query_config.get("fetch_min_reputation", -10))
+        self.min_reputation_for_fetch = int(qo.min_reputation)
         
         logger.debug(
-            f"FetchServiceConfig: top_k={self.top_k_hypotheses}, "
+            f"FetchServiceConfig loaded from AdminPolicy: "
+            f"top_k={self.top_k_hypotheses}, "
             f"min_reputation={self.min_reputation_for_fetch}"
         )
 
