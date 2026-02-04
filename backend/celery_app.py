@@ -3,12 +3,12 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-import os
+from app.config.system_settings import system_settings
 
 celery_app = Celery(
     "worker",
-    broker=os.getenv("CELERY_BROKER_URL"),
-    backend=os.getenv("CELERY_RESULT_BACKEND"),
+    broker=system_settings.CELERY_BROKER_URL,
+    backend=system_settings.CELERY_RESULT_BACKEND,
 )
 
 

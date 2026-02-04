@@ -32,24 +32,14 @@ class IndirectPathConfig:
     @classmethod
     def load_from_env(cls) -> None:
         """Load configuration from environment variables."""
-        cls.MEASUREMENTS_ENABLED = (
-            os.getenv("INDIRECT_PATH_MEASUREMENTS_ENABLED", "true").lower() == "true"
-        )
-        cls.TEMPORAL_PLACEHOLDERS = (
-            os.getenv("INDIRECT_PATH_TEMPORAL_PLACEHOLDERS", "true").lower() == "true"
-        )
-        cls.CONFIDENCE_NORM_FACTOR = float(
-            os.getenv("DECISION_CONFIDENCE_NORM_FACTOR", "5.0")
-        )
-        cls.DOMINANCE_GAP_THRESHOLD = float(
-            os.getenv("INDIRECT_PATH_DOMINANCE_GAP_THRESHOLD", "0.2")
-        )
-        cls.MIN_PATH_LENGTH = int(
-            os.getenv("INDIRECT_PATH_MIN_LENGTH", "2")
-        )
-        cls.MAX_PATH_LENGTH = int(
-            os.getenv("INDIRECT_PATH_MAX_LENGTH", "5")
-        )
+        from app.config.system_settings import system_settings
+        
+        cls.MEASUREMENTS_ENABLED = system_settings.INDIRECT_PATH_MEASUREMENTS_ENABLED
+        cls.TEMPORAL_PLACEHOLDERS = system_settings.INDIRECT_PATH_TEMPORAL_PLACEHOLDERS
+        cls.CONFIDENCE_NORM_FACTOR = float(system_settings.DECISION_CONFIDENCE_NORM_FACTOR)
+        cls.DOMINANCE_GAP_THRESHOLD = system_settings.INDIRECT_PATH_DOMINANCE_GAP_THRESHOLD
+        cls.MIN_PATH_LENGTH = system_settings.INDIRECT_PATH_MIN_LENGTH
+        cls.MAX_PATH_LENGTH = system_settings.INDIRECT_PATH_MAX_LENGTH
         
         logger.info(
             f"IndirectPathConfig loaded: "

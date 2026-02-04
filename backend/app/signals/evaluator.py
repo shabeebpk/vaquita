@@ -20,44 +20,30 @@ class SignalConfig:
     """Configuration for signal computation."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
+        
         # Thresholds for signal classification
-        self.positive_threshold = float(os.getenv("SIGNAL_POSITIVE_THRESHOLD", "1"))
-        self.negative_threshold = float(os.getenv("SIGNAL_NEGATIVE_THRESHOLD", "-1"))
+        self.positive_threshold = system_settings.SIGNAL_POSITIVE_THRESHOLD
+        self.negative_threshold = system_settings.SIGNAL_NEGATIVE_THRESHOLD
         
         # Reputation adjustments
-        self.reputation_on_positive = int(os.getenv("SIGNAL_REPUTATION_POSITIVE_DELTA", "10"))
-        self.reputation_on_negative = int(os.getenv("SIGNAL_REPUTATION_NEGATIVE_DELTA", "-20"))
+        self.reputation_on_positive = system_settings.SIGNAL_REPUTATION_POSITIVE_DELTA
+        self.reputation_on_negative = system_settings.SIGNAL_REPUTATION_NEGATIVE_DELTA
         
         # Measurement weights for delta computation
         self.measurement_weights = {
-            "passed_hypothesis_count": float(
-                os.getenv("SIGNAL_WEIGHT_PASSED_HYPOTHESIS_COUNT", "1.0")
-            ),
-            "mean_confidence": float(
-                os.getenv("SIGNAL_WEIGHT_MEAN_CONFIDENCE", "0.8")
-            ),
-            "graph_density": float(
-                os.getenv("SIGNAL_WEIGHT_GRAPH_DENSITY", "0.5")
-            ),
-            "filtered_to_total_ratio": float(
-                os.getenv("SIGNAL_WEIGHT_FILTERED_RATIO", "0.3")
-            ),
+            "passed_hypothesis_count": system_settings.SIGNAL_WEIGHT_PASSED_HYPOTHESIS_COUNT,
+            "mean_confidence": system_settings.SIGNAL_WEIGHT_MEAN_CONFIDENCE,
+            "graph_density": system_settings.SIGNAL_WEIGHT_GRAPH_DENSITY,
+            "filtered_to_total_ratio": system_settings.SIGNAL_WEIGHT_FILTERED_RATIO,
         }
         
         # Normalization: max expected delta per measurement
         self.measurement_max_deltas = {
-            "passed_hypothesis_count": float(
-                os.getenv("SIGNAL_MAX_DELTA_PASSED_HYPOTHESIS_COUNT", "100")
-            ),
-            "mean_confidence": float(
-                os.getenv("SIGNAL_MAX_DELTA_MEAN_CONFIDENCE", "20")
-            ),
-            "graph_density": float(
-                os.getenv("SIGNAL_MAX_DELTA_GRAPH_DENSITY", "0.2")
-            ),
-            "filtered_to_total_ratio": float(
-                os.getenv("SIGNAL_MAX_DELTA_FILTERED_RATIO", "0.5")
-            ),
+            "passed_hypothesis_count": system_settings.SIGNAL_MAX_DELTA_PASSED_HYPOTHESIS_COUNT,
+            "mean_confidence": system_settings.SIGNAL_MAX_DELTA_MEAN_CONFIDENCE,
+            "graph_density": system_settings.SIGNAL_MAX_DELTA_GRAPH_DENSITY,
+            "filtered_to_total_ratio": system_settings.SIGNAL_MAX_DELTA_FILTERED_RATIO,
         }
         
         logger.info(

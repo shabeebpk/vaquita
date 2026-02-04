@@ -21,19 +21,20 @@ class ProviderConfig:
     """Global configuration for all providers."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
+        
         # Batch size: max papers per provider call for one SearchQuery
-        # From FETCH_BATCH_SIZE env var
-        self.batch_size = int(os.getenv("FETCH_BATCH_SIZE", "3"))
+        self.batch_size = system_settings.FETCH_BATCH_SIZE
         
         # List of enabled providers (comma-separated)
-        providers_str = os.getenv("FETCH_PROVIDERS", "arxiv,crossref")
+        providers_str = system_settings.FETCH_PROVIDERS
         self.enabled_providers = [p.strip() for p in providers_str.split(",")]
         
         # Provider timeout in seconds
-        self.timeout = float(os.getenv("FETCH_TIMEOUT_SECONDS", "30"))
+        self.timeout = system_settings.FETCH_TIMEOUT_SECONDS
         
         # Retry configuration
-        self.retry_attempts = int(os.getenv("FETCH_RETRY_ATTEMPTS", "3"))
+        self.retry_attempts = system_settings.FETCH_RETRY_ATTEMPTS
         
         logger.info(
             f"ProviderConfig: batch_size={self.batch_size}, "

@@ -14,89 +14,36 @@ class DecisionConfig:
     
     def __init__(self):
         """Initialize config from environment variables with safe defaults."""
+        from app.config.system_settings import system_settings
         
         # ===== Confidence Normalization =====
-        # Confidence values from Phase-4 are raw support counts (integers).
-        # Normalize them to [0, 1] range for decision logic.
-        # normalized_confidence = min(confidence / CONFIDENCE_NORMALIZATION_FACTOR, 1.0)
-        self.CONFIDENCE_NORMALIZATION_FACTOR = self._get_int_env(
-            "DECISION_CONFIDENCE_NORM_FACTOR",
-            default=10,
-            description="Divide raw confidence by this to get normalized [0,1]"
-        )
+        self.CONFIDENCE_NORMALIZATION_FACTOR = system_settings.DECISION_CONFIDENCE_NORM_FACTOR
         
         # ===== High Confidence Threshold =====
-        # For HALT_CONFIDENT decision: max_normalized_confidence >= this value
-        self.HIGH_CONFIDENCE_THRESHOLD = self._get_float_env(
-            "DECISION_HIGH_CONFIDENCE_THRESHOLD",
-            default=0.7,
-            description="Normalized confidence >= this triggers HALT_CONFIDENT (0-1 range)"
-        )
+        self.HIGH_CONFIDENCE_THRESHOLD = system_settings.DECISION_HIGH_CONFIDENCE_THRESHOLD
         
         # ===== Dominant Hypothesis Gap Ratio =====
-        # For is_dominant_clear: gap between 1st and 2nd > (gap_ratio * first_confidence)
-        # Example: if first=8, second=6, gap=2, and gap_ratio=0.3, then 2 > 0.3*8=2.4? No.
-        # This is measured on normalized confidence.
-        self.DOMINANT_GAP_RATIO = self._get_float_env(
-            "DECISION_DOMINANT_GAP_RATIO",
-            default=0.3,
-            description="1st-2nd confidence gap > (gap_ratio * max_conf) means dominant"
-        )
+        self.DOMINANT_GAP_RATIO = system_settings.DECISION_DOMINANT_GAP_RATIO
         
         # ===== Diversity Thresholds =====
-        # Low diversity (all similar source-target) triggers ASK_DOMAIN_EXPERT
-        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = self._get_int_env(
-            "DECISION_LOW_DIVERSITY_PAIRS_THRESHOLD",
-            default=2,
-            description="If unique_source_target_pairs < this, diversity is low"
-        )
+        self.LOW_DIVERSITY_UNIQUE_PAIRS_THRESHOLD = system_settings.DECISION_LOW_DIVERSITY_PAIRS_THRESHOLD
         
-        self.DIVERSITY_RATIO_THRESHOLD = self._get_float_env(
-            "DECISION_DIVERSITY_RATIO_THRESHOLD",
-            default=0.3,
-            description="If diversity_score < this, diversity is low"
-        )
+        self.DIVERSITY_RATIO_THRESHOLD = system_settings.DECISION_DIVERSITY_RATIO_THRESHOLD
         
         # ===== Graph Density Threshold =====
-        # Sparse graph (low density) triggers FETCH_MORE_LITERATURE
-        self.SPARSE_GRAPH_DENSITY_THRESHOLD = self._get_float_env(
-            "DECISION_SPARSE_GRAPH_DENSITY_THRESHOLD",
-            default=0.05,
-            description="If graph_density < this, graph is sparse"
-        )
+        self.SPARSE_GRAPH_DENSITY_THRESHOLD = system_settings.DECISION_SPARSE_GRAPH_DENSITY_THRESHOLD
         
         # ===== Path Support Threshold =====
-        # For HALT_CONFIDENT: max_paths_per_pair >= this value
-        # For HALT_NO_HYPOTHESIS: max_paths_per_pair < this value
-        self.PATH_SUPPORT_THRESHOLD = self._get_int_env(
-            "DECISION_PATH_SUPPORT_THRESHOLD",
-            default=2,
-            description="Min paths per pair for sufficient path support"
-        )
+        self.PATH_SUPPORT_THRESHOLD = system_settings.DECISION_PATH_SUPPORT_THRESHOLD
         
         # ===== Stability Cycle Threshold =====
-        # For HALT_NO_HYPOTHESIS: evidence_growth_rate ≈ 0 for this many consecutive cycles
-        self.STABILITY_CYCLE_THRESHOLD = self._get_int_env(
-            "DECISION_STABILITY_CYCLE_THRESHOLD",
-            default=3,
-            description="Number of consecutive cycles with ~0 growth to declare stability"
-        )
+        self.STABILITY_CYCLE_THRESHOLD = system_settings.DECISION_STABILITY_CYCLE_THRESHOLD
         
         # ===== Filtering Thresholds =====
-        # If very few hypotheses passed filter vs total, may indicate problem
-        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = self._get_float_env(
-            "DECISION_PASSED_TO_TOTAL_RATIO_THRESHOLD",
-            default=0.2,
-            description="If passed/total ratio < this, warning signal"
-        )
+        self.PASSED_TO_TOTAL_RATIO_THRESHOLD = system_settings.DECISION_PASSED_TO_TOTAL_RATIO_THRESHOLD
         
         # ===== Minimum Viable Hypotheses =====
-        # If total hypothesis count < this, insufficient_signal
-        self.MINIMUM_HYPOTHESES_THRESHOLD = self._get_int_env(
-            "DECISION_MINIMUM_HYPOTHESES_THRESHOLD",
-            default=1,
-            description="If total_hypothesis_count < this, INSUFFICIENT_SIGNAL"
-        )
+        self.MINIMUM_HYPOTHESES_THRESHOLD = system_settings.DECISION_MINIMUM_HYPOTHESES_THRESHOLD
         
         logger.info(
             f"DecisionConfig initialized: "

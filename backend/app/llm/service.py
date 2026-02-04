@@ -31,15 +31,17 @@ class LLMService:
     
     def __init__(self):
         """Initialize the service with .env configuration."""
-        self.provider = os.getenv("LLM_PROVIDER", "dummy").lower().strip()
-        self.model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-        self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.0"))
-        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "800"))
+        from app.config.system_settings import system_settings
+        
+        self.provider = system_settings.LLM_PROVIDER.lower().strip()
+        self.model = system_settings.LLM_MODEL
+        self.temperature = system_settings.LLM_TEMPERATURE
+        self.max_tokens = system_settings.LLM_MAX_TOKENS
         
         # Provider-specific config
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
-        self.nvidia_base_url = os.getenv("NVIDIA_BASE_URL")
+        self.openai_api_key = system_settings.OPENAI_API_KEY
+        self.nvidia_api_key = system_settings.NVIDIA_API_KEY
+        self.nvidia_base_url = system_settings.NVIDIA_BASE_URL
         
         self.adapter = self._init_adapter()
         

@@ -45,11 +45,12 @@ class FetchServiceConfig:
     """Configuration for fetch service."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
         # Max hypotheses to fetch for in one FETCH_MORE cycle
-        self.top_k_hypotheses = int(os.getenv("FETCH_TOP_K_HYPOTHESES", "5"))
+        self.top_k_hypotheses = system_settings.FETCH_TOP_K_HYPOTHESES
         
         # Min reputation to consider hypothesis for fetch
-        self.min_reputation_for_fetch = int(os.getenv("FETCH_MIN_REPUTATION", "-10"))
+        self.min_reputation_for_fetch = system_settings.FETCH_MIN_REPUTATION
         
         logger.info(
             f"FetchServiceConfig: top_k={self.top_k_hypotheses}, "

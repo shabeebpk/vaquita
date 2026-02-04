@@ -21,24 +21,20 @@ class DomainResolverConfig:
     """Configuration for domain resolution behavior."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
+        
         # Deterministic confidence threshold (0.0-1.0)
-        # If deterministic signal < threshold, fall back to LLM
-        self.deterministic_threshold = float(
-            os.getenv("DOMAIN_DETERMINISTIC_THRESHOLD", "0.7")
-        )
+        self.deterministic_threshold = system_settings.DOMAIN_DETERMINISTIC_THRESHOLD
         
         # LLM confidence threshold for accepting LLM classification
-        self.llm_threshold = float(os.getenv("DOMAIN_LLM_THRESHOLD", "0.6"))
+        self.llm_threshold = system_settings.DOMAIN_LLM_THRESHOLD
         
         # Available domain labels (comma-separated)
-        domain_labels = os.getenv(
-            "DOMAIN_LABELS",
-            "biomedical,computer_science,physics,chemistry,mathematics,engineering"
-        )
+        domain_labels = system_settings.DOMAIN_LABELS
         self.domain_labels = [d.strip() for d in domain_labels.split(",")]
         
         # Keyword mappings for deterministic detection (JSON)
-        keywords_json = os.getenv("DOMAIN_KEYWORDS", "{}")
+        keywords_json = system_settings.DOMAIN_KEYWORDS
         try:
             self.domain_keywords = json.loads(keywords_json)
         except json.JSONDecodeError:

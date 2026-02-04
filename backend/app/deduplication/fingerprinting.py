@@ -18,16 +18,16 @@ class FingerprintConfig:
     """Configuration for fingerprinting behavior."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
+        
         # Algorithm: 'md5', 'sha256' - from FINGERPRINT_ALGORITHM env var
-        self.algorithm = os.getenv("FINGERPRINT_ALGORITHM", "sha256").lower()
+        self.algorithm = system_settings.FINGERPRINT_ALGORITHM.lower()
         
         # Threshold: minimum similarity score (0.0-1.0) to consider fingerprints equivalent
-        # From FINGERPRINT_SIMILARITY_THRESHOLD env var
-        self.similarity_threshold = float(os.getenv("FINGERPRINT_SIMILARITY_THRESHOLD", "0.95"))
+        self.similarity_threshold = system_settings.FINGERPRINT_SIMILARITY_THRESHOLD
         
         # Components to include in fingerprint: 'title', 'abstract', 'authors'
-        # From FINGERPRINT_COMPONENTS env var (comma-separated)
-        components = os.getenv("FINGERPRINT_COMPONENTS", "title,abstract")
+        components = system_settings.FINGERPRINT_COMPONENTS
         self.components = [c.strip() for c in components.split(",")]
         
         logger.info(

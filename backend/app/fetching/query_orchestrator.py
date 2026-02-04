@@ -23,17 +23,19 @@ class QueryOrchestratorConfig:
     """Configuration for query orchestration."""
     
     def __init__(self):
+        from app.config.system_settings import system_settings
+        
         # Max signature length for hypothesis_signature
-        self.signature_length = int(os.getenv("QUERY_SIGNATURE_LENGTH", "64"))
+        self.signature_length = system_settings.QUERY_SIGNATURE_LENGTH
         
         # Initial reputation score for new queries
-        self.initial_reputation = int(os.getenv("QUERY_INITIAL_REPUTATION", "0"))
+        self.initial_reputation = system_settings.QUERY_INITIAL_REPUTATION
         
         # Reputation decay per exhaustion
-        self.reputation_exhaustion_decay = int(os.getenv("QUERY_REPUTATION_EXHAUSTION_DECAY", "-5"))
+        self.reputation_exhaustion_decay = system_settings.QUERY_REPUTATION_EXHAUSTION_DECAY
         
         # Max reuse attempts for a single query before marking exhausted
-        self.max_reuse_attempts = int(os.getenv("QUERY_MAX_REUSE_ATTEMPTS", "3"))
+        self.max_reuse_attempts = system_settings.QUERY_MAX_REUSE_ATTEMPTS
         
         logger.info(
             f"QueryOrchestratorConfig: signature_len={self.signature_length}, "

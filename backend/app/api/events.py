@@ -8,8 +8,9 @@ from fastapi.responses import StreamingResponse
 router = APIRouter()
 
 
+from app.config.system_settings import system_settings
 # r = redis.Redis(host=os.getenv("REDIS_URL"), port=6379, db=2)
-r = redis.from_url(os.getenv("REDIS_URL"))
+r = redis.from_url(system_settings.REDIS_URL)
 
 async def event_stream(user_id: int = 1):
     pubsub = r.pubsub()

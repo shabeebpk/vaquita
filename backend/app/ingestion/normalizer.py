@@ -129,7 +129,8 @@ class TextNormalizer:
         """
         # Determine lexical repair setting from parameter or environment
         if apply_lexical_repair is None:
-            enable_lexical_repair = os.getenv("ENABLE_LEXICAL_REPAIR", "0").lower() in ("1", "true", "yes")
+            from app.config.system_settings import system_settings
+            enable_lexical_repair = system_settings.ENABLE_LEXICAL_REPAIR
         else:
             enable_lexical_repair = apply_lexical_repair
 

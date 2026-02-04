@@ -34,10 +34,12 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
 
 
 # Configs (mirrored from runner.py)
-_INGESTION_SEGMENTATION_STRATEGY = os.getenv("INGESTION_SEGMENTATION_STRATEGY", "sentences")
-_INGESTION_SENTENCES_PER_BLOCK = int(os.getenv("INGESTION_SENTENCES_PER_BLOCK", "3"))
-_SEMANTIC_SIMILARITY_THRESHOLD = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.85"))
-_PATH_REASONING_MAX_HOPS = int(os.getenv("PATH_REASONING_MAX_HOPS", "2"))
+# Configs (mirrored from runner.py)
+from app.config.system_settings import system_settings
+_INGESTION_SEGMENTATION_STRATEGY = system_settings.INGESTION_SEGMENTATION_STRATEGY
+_INGESTION_SENTENCES_PER_BLOCK = system_settings.INGESTION_SENTENCES_PER_BLOCK
+_SEMANTIC_SIMILARITY_THRESHOLD = system_settings.SEMANTIC_SIMILARITY_THRESHOLD
+_PATH_REASONING_MAX_HOPS = system_settings.PATH_REASONING_MAX_HOPS
 
 # Stage -1: Classification and Routing
 # ============================================================================
@@ -425,10 +427,11 @@ def path_reasoning_stage(self, job_id: int):
             raise ValueError("Semantic graph not found for reasoning")
             
         # Reasoning params from env
-        seeds_env = os.getenv("PATH_REASONING_SEEDS", "")
+        # Reasoning params from env
+        seeds_env = system_settings.PATH_REASONING_SEEDS
         seeds = [s.strip() for s in seeds_env.split(",") if s.strip()] if seeds_env else None
-        allow_len3 = os.getenv("PATH_REASONING_ALLOW_LEN3", "0") == "1"
-        stoplist_env = os.getenv("PATH_REASONING_STOPLIST", "")
+        allow_len3 = system_settings.PATH_REASONING_ALLOW_LEN3
+        stoplist_env = system_settings.PATH_REASONING_STOPLIST
         stoplist = set(s.strip().lower() for s in stoplist_env.split(",") if s.strip()) if stoplist_env else None
 
         hypotheses = run_path_reasoning(

@@ -42,7 +42,8 @@ class AskUserInputHandler(Handler):
         Loads prompts via the centralized prompt loader.
         """
         # Check if LLM-based question generation is enabled
-        use_llm = os.getenv("CLARIFICATION_USE_LLM", "0") == "1"
+        from app.config.system_settings import system_settings
+        use_llm = system_settings.CLARIFICATION_USE_LLM == 1
         
         if use_llm:
             try:
