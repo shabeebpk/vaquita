@@ -22,8 +22,8 @@ class SignalConfig:
     def __init__(self, job_config: dict = None):
         """Initialize config from job configuration."""
         job_config = job_config or {}
-        expert_settings = job_config.get("expert_settings", {})
-        signals_config = expert_settings.get("signals", {})
+        algo_params = job_config.get("algorithm_params", {})
+        signals_config = algo_params.get("signals", {})
         
         # Thresholds for signal classification
         self.positive_threshold = float(signals_config.get("positive_threshold", 1.0))

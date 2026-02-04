@@ -62,7 +62,6 @@ class Job(Base):
     
     # Configuration
     job_config = Column(JSONB, nullable=False, server_default='{}')  # Full configuration snapshot
-    domain = Column(String, nullable=True)  # Override domain
 
 
 class ConversationMessage(Base):

@@ -12,7 +12,9 @@ from app.storage.models import Job, File as FileModel, FileOriginType
 from worker.stage_tasks import classify_stage, extract_stage, mark_ready_stage
 from celery import chord
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+from app.config.loader import load_default_job_config
+
+# ...
 
 @router.post("/")
 async def unified_chat(
@@ -27,14 +29,12 @@ async def unified_chat(
     with Session(engine) as session:
         # 1. Lazy Job Creation
         if job_id is None:
-            # Load default job config
+            # Load default job config via centralized loader
             try:
-                config_path = os.path.join(os.path.dirname(__file__), "../config/default_job_config.json")
-                with open(config_path, "r") as f:
-                    default_config = json.load(f)
+                default_config = load_default_job_config()
             except Exception as e:
-                logger.error(f"Failed to load default job configuration: {e}")
-                default_config = {}
+                logger.error(f"Failed to create job: {e}")
+                raise HTTPException(status_code=500, detail="Configuration error")
 
             job = Job(status="CREATED", job_config=default_config)
             session.add(job)

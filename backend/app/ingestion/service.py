@@ -88,7 +88,7 @@ class IngestionService:
                 )
             
             # Load defaults from job_config if not provided
-            ingest_config = job.job_config.get("expert_settings", {}).get("ingestion", {})
+            ingest_config = job.job_config.get("algorithm_params", {}).get("ingestion", {})
             
             if segmentation_kwargs is None:
                 segmentation_kwargs = {

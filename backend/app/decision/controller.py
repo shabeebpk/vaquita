@@ -173,7 +173,7 @@ def get_decision_controller(provider_override: Optional[str] = None) -> Decision
     Returns:
         An initialized DecisionController.
     """
-    import os
+    from app.config.system_settings import system_settings
     
-    provider = provider_override or os.getenv("DECISION_PROVIDER", "rule_based")
+    provider = provider_override or system_settings.DECISION_PROVIDER
     return DecisionController(provider_name=provider)

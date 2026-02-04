@@ -35,17 +35,11 @@ class SystemSettings(BaseSettings):
     SYSTEM_MAX_FETCH_CYCLES: int = Field(5, env="SYSTEM_MAX_FETCH_CYCLES")
     SYSTEM_MAX_GRAPH_SIZE: int = Field(5000, env="SYSTEM_MAX_GRAPH_SIZE")
     
-    # Algorithm Invariants
-    SEMANTIC_SIMILARITY_THRESHOLD: float = Field(0.85, env="SEMANTIC_SIMILARITY_THRESHOLD")
-    PATH_REASONING_MAX_HOPS: int = Field(2, env="PATH_REASONING_MAX_HOPS")
-    PATH_REASONING_ALLOW_LEN3: bool = Field(False, env="PATH_REASONING_ALLOW_LEN3")
+    # Prompt Files (System Assets)
+    DOMAIN_RESOLVER_PROMPT_FILE: str = Field("domain_resolver.txt", env="DOMAIN_RESOLVER_PROMPT_FILE")
     
-    FINGERPRINT_ALGORITHM: str = Field("minhash", env="FINGERPRINT_ALGORITHM")
-    FINGERPRINT_SIMILARITY_THRESHOLD: float = Field(0.9, env="FINGERPRINT_SIMILARITY_THRESHOLD")
-    FINGERPRINT_COMPONENTS: str = Field("content", env="FINGERPRINT_COMPONENTS")
-    
-    INDIRECT_PATH_MEASUREMENTS_ENABLED: bool = Field(True, env="INDIRECT_PATH_MEASUREMENTS_ENABLED")
-    INDIRECT_PATH_TEMPORAL_PLACEHOLDERS: bool = Field(False, env="INDIRECT_PATH_TEMPORAL_PLACEHOLDERS")
+    # Decision
+    DECISION_PROVIDER: str = Field("rule_based", env="DECISION_PROVIDER")
 
     class Config:
         env_file = ".env"

@@ -17,8 +17,8 @@ class IndirectPathConfig:
         """Initialize config from job configuration."""
         from app.config.system_settings import system_settings
         job_config = job_config or {}
-        expert_settings = job_config.get("expert_settings", {})
-        heuristics = expert_settings.get("heuristics", {})
+        algo_params = job_config.get("algorithm_params", {})
+        heuristics = algo_params.get("heuristics", {})
         
         # Feature toggles from SystemSettings (Invariants)
         self.MEASUREMENTS_ENABLED = system_settings.INDIRECT_PATH_MEASUREMENTS_ENABLED

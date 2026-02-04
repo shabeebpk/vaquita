@@ -74,21 +74,7 @@
         "preferred_evidence_type": null,
         "reasoning_mode": "balanced",
         "max_papers_for_job": null,
-        "expert_settings": {
-            "assumptions": [],
-            "preferred_predicates": [],
-            "causal_bias": false,
-            "confidence_prior": 0.5,
-            "ingestion": {
-                "segmentation_strategy": "sentences",
-                "sentences_per_block": 3,
-                "enable_lexical_repair": false
-            },
-            "domain_resolution": {
-                "deterministic_threshold": 0.7,
-                "llm_threshold": 0.6,
-                "resolver_prompt_file": "domain_resolver.txt"
-            },
+        "algorithm_params": {
             "heuristics": {
                 "decision_confidence_norm_factor": 10,
                 "decision_high_confidence_threshold": 0.7,
@@ -103,6 +89,15 @@
                 "indirect_path_dominance_gap_threshold": 0.2,
                 "indirect_path_min_length": 3,
                 "indirect_path_max_length": 4
+            },
+            "ingestion": {
+                "segmentation_strategy": "sentences",
+                "sentences_per_block": 3,
+                "enable_lexical_repair": false
+            },
+            "domain_resolution": {
+                "deterministic_threshold": 0.7,
+                "llm_threshold": 0.6
             },
             "signals": {
                 "positive_threshold": 1.0,
@@ -125,6 +120,13 @@
             "handlers": {
                 "clarification_use_llm": false
             }
+        },
+        "expert_settings": {
+            "assumptions": [],
+            "preferred_predicates": [],
+            "causal_bias": false,
+            "confidence_prior": 0.5,
+            "heuristics": {}
         },
         "query_config": {
             "query_expansion_terms": [],

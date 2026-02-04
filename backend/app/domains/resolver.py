@@ -30,7 +30,17 @@ class DomainResolverConfig:
         allowed_domains = allowed_domains or []
         
         expert_settings = job_config.get("expert_settings", {})
-        res_config = expert_settings.get("domain_resolution", {})
+        # heuristic definitions moved to algorithm_params in refactor
+        # check both locations for backward compatibility during migration if needed, 
+        # but prefer algorithm_params as per new spec.
+        
+        algo_params = job_config.get("algorithm_params", {})
+        res_config = algo_params.get("domain_resolution", {})
+        
+        # Fallback to expert_settings if not in algo_params (transition safety?) 
+        # No, prompt says "must live at the top level... under a new section". 
+        # "Any logic... must read exclusively from job.job_config".
+        # I will strictly read from algorithm_params as the source of truth for thresholds.
         
         # Thresholds from job config
         self.deterministic_threshold = float(res_config.get("deterministic_threshold", 0.7))
@@ -174,7 +184,7 @@ def llm_domain_resolution(
         config = DomainResolverConfig()
     
     if not llm_client:
-        logger.warning("No LLM client provided, cannot perform LLM domain resolution")
+        logger.warning("No LLM client provided, cannot perform LLM domain classification")
         return None, 0.0
     
     source = hypothesis.get("source", "")
@@ -184,8 +194,9 @@ def llm_domain_resolution(
     # Build closed-set classification prompt
     domains_str = ", ".join(config.domain_labels)
     
-    # Load prompt template from file
-    prompt_file = os.getenv("DOMAIN_RESOLVER_PROMPT_FILE", "domain_resolver.txt")
+    # Load prompt template from SystemSettings
+    from app.config.system_settings import system_settings
+    prompt_file = system_settings.DOMAIN_RESOLVER_PROMPT_FILE
     template = load_prompt(prompt_file)
     
     if not template:

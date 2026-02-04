@@ -15,8 +15,8 @@ class DecisionConfig:
     def __init__(self, job_config: dict = None):
         """Initialize config from job configuration."""
         job_config = job_config or {}
-        expert_settings = job_config.get("expert_settings", {})
-        heuristics = expert_settings.get("heuristics", {})
+        algo_params = job_config.get("algorithm_params", {})
+        heuristics = algo_params.get("heuristics", {})
         
         # ===== Confidence Normalization =====
         self.CONFIDENCE_NORMALIZATION_FACTOR = int(heuristics.get("decision_confidence_norm_factor", 10))
