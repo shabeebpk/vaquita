@@ -84,7 +84,8 @@
             "path_support_threshold": 2,
             "stability_cycle_threshold": 3,
             "passed_to_total_ratio_threshold": 0.2,
-            "minimum_hypotheses_threshold": 1
+            "minimum_hypotheses_threshold": 1,
+            "semantic_similarity_threshold": 0.7
         },
         "signal_params": {
             "positive_threshold": 1.0,
@@ -106,14 +107,30 @@
         },
         "ingestion_defaults": {
             "segmentation_strategy": "sentences",
-            "sentences_per_block": 3,
+            "sentences_per_block": 1,
             "enable_lexical_repair": false
+        },
+        "deduplication_defaults": {
+            "algorithm": "sha256",
+            "similarity_threshold": 0.95,
+            "components": [
+                "title",
+                "abstract"
+            ]
+        },
+        "path_reasoning_defaults": {
+            "max_hops": 4,
+            "allow_len3": true,
+            "seeds": [],
+            "stoplist": []
         },
         "domain_resolution": {
             "deterministic_threshold": 0.7,
             "llm_threshold": 0.6
         },
         "indirect_path": {
+            "enabled": true,
+            "temporal_placeholders": true,
             "dominance_gap_threshold": 0.2,
             "min_length": 3,
             "max_length": 4

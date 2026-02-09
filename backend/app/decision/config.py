@@ -56,3 +56,15 @@ class DecisionConfig:
             f"norm_factor={self.CONFIDENCE_NORMALIZATION_FACTOR}, "
             f"high_conf={self.HIGH_CONFIDENCE_THRESHOLD}"
         )
+
+
+_config = None
+
+def get_decision_config(job_config: dict = None) -> DecisionConfig:
+    """
+    Get or create the global DecisionConfig instance.
+    """
+    global _config
+    if _config is None:
+        _config = DecisionConfig(job_config)
+    return _config

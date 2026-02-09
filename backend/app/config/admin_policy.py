@@ -18,7 +18,7 @@ import os
 import json
 import logging
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class DecisionThresholds(BaseModel):
     stability_cycle_threshold: int = 3
     passed_to_total_ratio_threshold: float = 0.2
     minimum_hypotheses_threshold: int = 1
+    semantic_similarity_threshold: float = 0.7
 
 
 class SignalWeights(BaseModel):
@@ -79,6 +80,21 @@ class IngestionDefaults(BaseModel):
     enable_lexical_repair: bool = False
 
 
+class DeduplicationDefaults(BaseModel):
+    """Deduplication and fingerprinting parameters."""
+    algorithm: str = "sha256"
+    similarity_threshold: float = 0.95
+    components: List[str] = ["title", "abstract"]
+
+
+class PathReasoningDefaults(BaseModel):
+    """Path reasoning and hypothesis generation parameters."""
+    max_hops: int = 4
+    allow_len3: bool = True
+    seeds: List[str] = []
+    stoplist: List[str] = []
+
+
 class DomainResolution(BaseModel):
     """Domain resolution thresholds."""
     deterministic_threshold: float = 0.7
@@ -87,6 +103,8 @@ class DomainResolution(BaseModel):
 
 class IndirectPath(BaseModel):
     """Indirect path measurement parameters."""
+    enabled: bool = True
+    temporal_placeholders: bool = True
     dominance_gap_threshold: float = 0.2
     min_length: int = 3
     max_length: int = 4
@@ -97,6 +115,8 @@ class Algorithm(BaseModel):
     decision_thresholds: DecisionThresholds = Field(default_factory=DecisionThresholds)
     signal_params: SignalParams = Field(default_factory=SignalParams)
     ingestion_defaults: IngestionDefaults = Field(default_factory=IngestionDefaults)
+    deduplication_defaults: DeduplicationDefaults = Field(default_factory=DeduplicationDefaults)
+    path_reasoning_defaults: PathReasoningDefaults = Field(default_factory=PathReasoningDefaults)
     domain_resolution: DomainResolution = Field(default_factory=DomainResolution)
     indirect_path: IndirectPath = Field(default_factory=IndirectPath)
 
@@ -128,7 +148,8 @@ class AdminPolicy(BaseModel):
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
     decision_provider: str = "rule_based"
     
-    @validator('allowed_domains')
+    @field_validator('allowed_domains')
+    @classmethod
     def validate_domains(cls, v):
         if not v:
             raise ValueError("At least one domain must be defined")

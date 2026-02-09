@@ -34,12 +34,11 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
 
 
 # Configs (mirrored from runner.py)
-# Configs (mirrored from runner.py)
-from app.config.system_settings import system_settings
-_INGESTION_SEGMENTATION_STRATEGY = system_settings.INGESTION_SEGMENTATION_STRATEGY
-_INGESTION_SENTENCES_PER_BLOCK = system_settings.INGESTION_SENTENCES_PER_BLOCK
-_SEMANTIC_SIMILARITY_THRESHOLD = system_settings.SEMANTIC_SIMILARITY_THRESHOLD
-_PATH_REASONING_MAX_HOPS = system_settings.PATH_REASONING_MAX_HOPS
+from app.config.admin_policy import admin_policy
+_INGESTION_SEGMENTATION_STRATEGY = admin_policy.algorithm.ingestion_defaults.segmentation_strategy
+_INGESTION_SENTENCES_PER_BLOCK = admin_policy.algorithm.ingestion_defaults.sentences_per_block
+_SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.decision_thresholds.semantic_similarity_threshold
+_PATH_REASONING_MAX_HOPS = admin_policy.algorithm.path_reasoning_defaults.max_hops
 
 # Stage -1: Classification and Routing
 # ============================================================================
@@ -426,13 +425,10 @@ def path_reasoning_stage(self, job_id: int):
         if not persisted_graph:
             raise ValueError("Semantic graph not found for reasoning")
             
-        # Reasoning params from env
-        # Reasoning params from env
-        seeds_env = system_settings.PATH_REASONING_SEEDS
-        seeds = [s.strip() for s in seeds_env.split(",") if s.strip()] if seeds_env else None
-        allow_len3 = system_settings.PATH_REASONING_ALLOW_LEN3
-        stoplist_env = system_settings.PATH_REASONING_STOPLIST
-        stoplist = set(s.strip().lower() for s in stoplist_env.split(",") if s.strip()) if stoplist_env else None
+        # Reasoning params from AdminPolicy
+        seeds = admin_policy.algorithm.path_reasoning_defaults.seeds
+        allow_len3 = admin_policy.algorithm.path_reasoning_defaults.allow_len3
+        stoplist = set(admin_policy.algorithm.path_reasoning_defaults.stoplist)
 
         hypotheses = run_path_reasoning(
             persisted_graph,

@@ -15,6 +15,7 @@ from celery import chord
 from app.config.loader import load_default_job_config
 
 # ...
+router = APIRouter()
 
 @router.post("/")
 async def unified_chat(

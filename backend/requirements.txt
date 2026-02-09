@@ -9,6 +9,7 @@ networkx
 nltk
 python-dotenv
 pydantic
+pydantic-settings
 openai
 wordfreq
 alembic

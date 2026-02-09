@@ -1,29 +1,69 @@
-"""In-memory cache for interim graph artifacts.
+"""Redis-backed cache for interim graph artifacts.
 
-This cache stores Phase-2 structural graph results keyed by job_id so
-that subsequent pipeline phases (e.g., Phase-2.5 sanitization) can reuse
-the already-built graph instead of recomputing it.
-
-This is intentionally simple and process-local. For multi-worker or
-distributed deployments, replace this with a shared cache (Redis, memcached).
+This cache stores Phase-2 structural graph results in Redis, allowing
+different Celery worker processes to share the graph data.
 """
-from typing import Any, Dict
-import threading
+import json
+import logging
+from typing import Any, Optional
+import redis
 
-_lock = threading.RLock()
-_structural_cache: Dict[int, Any] = {}
+from app.config.system_settings import system_settings
 
+logger = logging.getLogger(__name__)
+
+# Initialize synchronous Redis client
+try:
+    _redis_client = redis.from_url(system_settings.REDIS_URL)
+    _redis_client.ping()
+    logger.info("Structural graph cache connected to Redis.")
+except Exception as e:
+    logger.error(f"Failed to connect to Redis for structural graph cache: {e}")
+    # Fallback to a dictionary for local testing if Redis is missing, 
+    # though this will fail in multi-process worker environments.
+    _redis_client = None
+    _local_fallback = {}
+
+CACHE_PREFIX = "structural_graph:"
+DEFAULT_TTL = 3600  # 1 hour
 
 def set_structural_graph(job_id: int, value: Any) -> None:
-    with _lock:
-        _structural_cache[int(job_id)] = value
+    """Store the structural graph in Redis with a TTL."""
+    key = f"{CACHE_PREFIX}{job_id}"
+    try:
+        if _redis_client:
+            # Serialize to JSON for Redis storage
+            serialized = json.dumps(value)
+            _redis_client.set(key, serialized, ex=DEFAULT_TTL)
+            logger.debug(f"Stored structural graph in Redis for job {job_id}")
+        else:
+            _local_fallback[int(job_id)] = value
+    except Exception as e:
+        logger.error(f"Error setting structural graph in cache for job {job_id}: {e}")
 
-
-def get_structural_graph(job_id: int):
-    with _lock:
-        return _structural_cache.get(int(job_id))
-
+def get_structural_graph(job_id: int) -> Optional[Any]:
+    """Retrieve the structural graph from Redis."""
+    key = f"{CACHE_PREFIX}{job_id}"
+    try:
+        if _redis_client:
+            data = _redis_client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+        else:
+            return _local_fallback.get(int(job_id))
+    except Exception as e:
+        logger.error(f"Error getting structural graph from cache for job {job_id}: {e}")
+        return None
 
 def delete_structural_graph(job_id: int) -> None:
-    with _lock:
-        _structural_cache.pop(int(job_id), None)
+    """Delete the structural graph from Redis."""
+    key = f"{CACHE_PREFIX}{job_id}"
+    try:
+        if _redis_client:
+            _redis_client.delete(key)
+            logger.debug(f"Deleted structural graph from Redis for job {job_id}")
+        else:
+            _local_fallback.pop(int(job_id), None)
+    except Exception as e:
+        logger.error(f"Error deleting structural graph from cache for job {job_id}: {e}")

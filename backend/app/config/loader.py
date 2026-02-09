@@ -24,14 +24,12 @@ def load_default_job_config() -> Dict[str, Any]:
         with open(config_path, "r") as f:
             config = json.load(f)
             
-        # Basic Validation: Ensure key top-level keys exist
-        required_keys = ["allowed_domains", "default_job_config"]
-        for key in required_keys:
-            if key not in config:
-                raise ValueError(f"Default config missing required key: {key}")
-                
-        # Return deep copy to prevent mutation of cached/global state if we were caching
-        return copy.deepcopy(config.get("default_job_config", {}))
+        # Basic Validation: Ensure at least one known key exists
+        if "query_config" not in config:
+            raise ValueError(f"Default config missing expected key: query_config")
+            
+        # Return deep copy to prevent mutation
+        return copy.deepcopy(config)
         
     except Exception as e:
         logger.error(f"CRITICAL: Failed to load default job config: {e}")
