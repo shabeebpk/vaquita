@@ -310,6 +310,7 @@ class Hypothesis(Base):
     path = Column(JSONB, nullable=False)  # Ordered array of node texts
     predicates = Column(JSONB, nullable=False)  # Array of edge labels along path
     explanation = Column(Text, nullable=False)
+    domain = Column(String, nullable=True)  # Single source of truth for hypothesis domain
     confidence = Column(Integer, nullable=False)  # 0–100 score
     mode = Column(String, nullable=False)  # 'explore' or 'query'
     

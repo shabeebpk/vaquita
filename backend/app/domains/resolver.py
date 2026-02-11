@@ -1,16 +1,14 @@
 """
-Domains module: domain detection for provider selection.
+Domains module: LLM-only domain detection for hypothesis classification.
 
-Separated from fetching and signals. Domain resolution guides provider
-selection only; never influences hypothesis confidence or decision outcomes.
-
-Deterministic + LLM fallback strategy with full configuration.
+This module implements the Domain Resolution Contract:
+- LLM-only (or job override)
+- Closed-set classification from admin_policy.allowed_domains
+- Fallback loop through admin_policy.llm_order
+- Stable, one-time assignment per hypothesis
 """
 import logging
-import os
-import json
-from typing import Dict, Any, Optional, Tuple, List
-from sqlalchemy.orm import Session
+from typing import Dict, Any, Optional, List, Tuple
 
 from app.prompts.loader import load_prompt
 
@@ -18,235 +16,105 @@ logger = logging.getLogger(__name__)
 
 
 class DomainResolverConfig:
-    def __init__(self, job_config: dict = None, allowed_domains: list = None):
-        """
-        Initialize config from AdminPolicy.
-        
-        Args:
-            job_config: Deprecated, kept for backward compatibility.
-            allowed_domains: Deprecated, loaded from AdminPolicy instead.
-        """
+    """Config wrapper for domain resolution from AdminPolicy."""
+    def __init__(self):
         from app.config.admin_policy import admin_policy
-        
-        # Load thresholds from AdminPolicy
         dr = admin_policy.algorithm.domain_resolution
-        self.deterministic_threshold = float(dr.deterministic_threshold)
-        self.llm_threshold = float(dr.llm_threshold)
         
-        # Load domain definitions from AdminPolicy
-        self.domain_labels = [d.name for d in admin_policy.allowed_domains]
-        self.domain_keywords = {d.name: d.keywords for d in admin_policy.allowed_domains}
+        self.allowed_domains = dr.allowed_domains
         
-        logger.debug(
-            f"DomainResolverConfig loaded from AdminPolicy: "
-            f"threshold={self.deterministic_threshold}, "
-            f"domains={len(self.domain_labels)}, llm_threshold={self.llm_threshold}"
-        )
-
-
-def get_hypothesis_keywords(hypothesis: Dict[str, Any]) -> List[str]:
-    """Extract keywords from hypothesis (source, target, path)."""
-    keywords = []
-    
-    # Source and target nodes
-    if "source" in hypothesis:
-        keywords.append(str(hypothesis["source"]).lower())
-    if "target" in hypothesis:
-        keywords.append(str(hypothesis["target"]).lower())
-    
-    # Path nodes
-    if "path" in hypothesis and isinstance(hypothesis["path"], list):
-        for node in hypothesis["path"]:
-            keywords.append(str(node).lower())
-    
-    # Explanation
-    if "explanation" in hypothesis:
-        explanation_words = str(hypothesis["explanation"]).lower().split()
-        keywords.extend(explanation_words[:20])  # Limit to first 20 words
-    
-    return keywords
-
-
-def score_domain_match(
-    keywords: List[str],
-    domain_labels: List[str],
-    domain_keywords: Dict[str, List[str]]
-) -> Dict[str, float]:
-    """
-    Score each domain based on keyword matches.
-    
-    Args:
-        keywords: List of keyword strings from hypothesis
-        domain_labels: List of domain names
-        domain_keywords: Dict mapping domain -> list of keywords
-    
-    Returns:
-        Dict mapping domain -> confidence score (0.0-1.0)
-    """
-    scores = {}
-    
-    for domain in domain_labels:
-        domain_kw = domain_keywords.get(domain, [])
-        if not domain_kw:
-            scores[domain] = 0.0
-            continue
-        
-        # Count matches (case-insensitive, substring match)
-        matches = sum(
-            1 for kw in keywords
-            for dkw in domain_kw
-            if dkw.lower() in kw.lower()
-        )
-        
-        # Normalize by maximum possible matches
-        max_matches = len(keywords) * len(domain_kw)
-        if max_matches > 0:
-            score = min(1.0, matches / max_matches)
-        else:
-            score = 0.0
-        
-        scores[domain] = score
-    
-    return scores
-
-
-def deterministic_domain_resolution(
-    hypothesis: Dict[str, Any],
-    config: Optional[DomainResolverConfig] = None
-) -> Tuple[Optional[str], float]:
-    """
-    Attempt deterministic domain resolution from hypothesis keywords.
-    
-    Args:
-        hypothesis: Hypothesis dict with source, target, path, explanation
-        config: DomainResolverConfig (created if None)
-    
-    Returns:
-        Tuple of (domain_name or None, confidence score)
-    """
-    if config is None:
-        config = DomainResolverConfig()
-    
-    keywords = get_hypothesis_keywords(hypothesis)
-    if not keywords:
-        logger.debug("No keywords extracted from hypothesis for deterministic resolution")
-        return None, 0.0
-    
-    # Score each domain
-    scores = score_domain_match(keywords, config.domain_labels, config.domain_keywords)
-    
-    # Find best match
-    if not scores:
-        return None, 0.0
-    
-    best_domain = max(scores, key=scores.get)
-    best_score = scores[best_domain]
-    
-    logger.debug(
-        f"Deterministic domain scores: {scores}. Best: {best_domain} ({best_score:.2f})"
-    )
-    
-    if best_score >= config.deterministic_threshold:
-        return best_domain, best_score
-    
-    return None, best_score
+        logger.debug(f"DomainResolverConfig loaded: allowed={self.allowed_domains}")
 
 
 def llm_domain_resolution(
     hypothesis: Dict[str, Any],
-    llm_client: Optional[Any] = None,
-    config: Optional[DomainResolverConfig] = None
-) -> Tuple[Optional[str], float]:
+    llm_client: Any,
+    config: DomainResolverConfig
+) -> Optional[str]:
     """
-    Fall back to LLM for closed-set domain classification.
+    Classify hypothesis into a domain using the LLM fallback loop.
     
-    Args:
-        hypothesis: Hypothesis dict
-        llm_client: LLM client (e.g., OpenAI)
-        config: DomainResolverConfig (created if None)
-    
-    Returns:
-        Tuple of (domain_name or None, confidence score)
+    Tries each LLM provider in config.llm_order. Returns the first valid domain.
     """
-    if config is None:
-        config = DomainResolverConfig()
-    
-    if not llm_client:
-        logger.warning("No LLM client provided, cannot perform LLM domain classification")
-        return None, 0.0
-    
     source = hypothesis.get("source", "")
     target = hypothesis.get("target", "")
     explanation = hypothesis.get("explanation", "")
+    path = hypothesis.get("path", [])
     
-    # Build closed-set classification prompt
-    domains_str = ", ".join(config.domain_labels)
+    # Format hypothesis text for prompt
+    hyp_text = (
+        f"Source: {source}\n"
+        f"Target: {target}\n"
+        f"Path: {' -> '.join(path)}\n"
+        f"Explanation: {explanation}"
+    )
     
-    # Load prompt template from SystemSettings
+    domains_str = ", ".join(config.allowed_domains)
+    
+    # Load prompt contract
     from app.config.system_settings import system_settings
     prompt_file = system_settings.DOMAIN_RESOLVER_PROMPT_FILE
-    template = load_prompt(prompt_file, fallback="Classify hypothesis: {source} -> {target}. Domains: {domains}")
-    
-    prompt = template.format(source=source, target=target, explanation=explanation, domains=domains_str)
+    template = load_prompt(
+        prompt_file, 
+        fallback="Classify the following hypothesis domain. Allowed domains: {domains}. "
+                 "The hypothesis is: {hypothesis}. "
+                 "Return ONLY the domain name from the list, or empty if uncertain. "
+                 "No explanation, no formatting."
+    )
     
     try:
-
-        logger.info(f"llm client, {llm_client} , { 'yes' if 'call' in dir(llm_client) else dir(llm_client) }")
-        # Call LLM
-        response = llm_client.invoke(prompt)
+        prompt = template.format(
+            hypothesis=hyp_text, 
+            domains=domains_str,
+            source=source,
+            target=target,
+            explanation=explanation
+        )
+    except KeyError as e:
+        logger.warning(f"Prompt template missing variable: {e}. Falling back to basic format.")
+        prompt = f"Classify hypothesis: {hyp_text}. Domains: {domains_str}"
+    
+    # Call global LLM service (fallback is handled inside generate())
+    try:
+        response = llm_client.generate(prompt)
         
-        if isinstance(response, str):
-            domain_text = response.strip().lower()
-        else:
-            # Handle different LLM response formats
-            domain_text = str(response).lower()
+        if not response:
+            return None
+            
+        resolved = response.strip().lower()
         
-        # Validate domain is in allowed list
-        for domain in config.domain_labels:
-            if domain.lower() in domain_text:
-                logger.info(f"LLM domain resolution: {domain}")
-                return domain, config.llm_threshold
+        # Validation: must be in allowed_domains
+        for domain in config.allowed_domains:
+            if resolved == domain.lower():
+                logger.info(f"Successfully resolved domain '{domain}'")
+                return domain
         
-        logger.warning(f"LLM returned unrecognized domain: {domain_text}")
-        return None, 0.0
+        logger.warning(f"LLM returned invalid domain: '{resolved}'")
         
     except Exception as e:
-        logger.error(f"LLM domain resolution failed: {e}")
-        return None, 0.0
+        logger.error(f"Domain resolution failed at service level: {e}")
+        
+    return None
 
 
 def resolve_domain(
     hypothesis: Dict[str, Any],
-    llm_client: Optional[Any] = None,
-    config: Optional[DomainResolverConfig] = None
-) -> Tuple[Optional[str], float]:
+    job_config: Dict[str, Any],
+    llm_client: Any
+) -> Optional[str]:
     """
-    Resolve domain with deterministic fallback to LLM.
+    Authoritative domain resolution entry point.
     
-    Order:
-    1. Attempt deterministic resolution
-    2. If below threshold, fall back to LLM
-    3. If LLM succeeds and confidence >= threshold, return domain
-    4. Otherwise return None
-    
-    Args:
-        hypothesis: Hypothesis dict
-        llm_client: LLM client for fallback
-        config: DomainResolverConfig (created if None)
-    
-    Returns:
-        Tuple of (domain_name or None, confidence score)
+    Contract Flow:
+    1. Job Override Check
+    2. LLM Fallback Loop
     """
-    if config is None:
-        config = DomainResolverConfig()
-    
-    # Try deterministic first
-    domain, confidence = deterministic_domain_resolution(hypothesis, config)
-    if domain:
-        return domain, confidence
-    
-    # Fall back to LLM
-    logger.debug("Deterministic resolution insufficient, falling back to LLM")
-    domain, confidence = llm_domain_resolution(hypothesis, llm_client, config)
-    
-    return domain, confidence
+    # 1. Job Override Check
+    job_override = job_config.get("domain")
+    if job_override:
+        logger.info(f"Using job override domain: {job_override}")
+        return job_override
+        
+    # 2. LLM-based automatic resolution
+    config = DomainResolverConfig()
+    return llm_domain_resolution(hypothesis, llm_client, config)

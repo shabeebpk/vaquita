@@ -41,7 +41,6 @@ class AskUserInputHandler(Handler):
         Otherwise uses template-based generation.
         Loads prompts via the centralized prompt loader.
         """
-        """
         # Load job config to check if LLM is enabled
         use_llm = False
         with Session(engine) as session:

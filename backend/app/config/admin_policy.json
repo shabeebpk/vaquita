@@ -1,78 +1,18 @@
 {
-    "allowed_domains": [
-        {
-            "name": "biomedical",
-            "keywords": [
-                "protein",
-                "gene",
-                "cell",
-                "clinical",
-                "disease",
-                "drug",
-                "therapy"
-            ],
-            "provider": "semantic_scholar"
+    "llm": {
+        "providers": {
+            "nvidia": {
+                "active": true
+            },
+            "openai": {
+                "active": false
+            }
         },
-        {
-            "name": "computer_science",
-            "keywords": [
-                "algorithm",
-                "network",
-                "software",
-                "data",
-                "learning",
-                "compute"
-            ],
-            "provider": "semantic_scholar"
-        },
-        {
-            "name": "physics",
-            "keywords": [
-                "energy",
-                "quantum",
-                "particle",
-                "force",
-                "matter",
-                "wave"
-            ],
-            "provider": "semantic_scholar"
-        },
-        {
-            "name": "chemistry",
-            "keywords": [
-                "molecule",
-                "reaction",
-                "bond",
-                "catalyst",
-                "synthesis"
-            ],
-            "provider": "semantic_scholar"
-        },
-        {
-            "name": "mathematics",
-            "keywords": [
-                "theorem",
-                "proof",
-                "equation",
-                "logic",
-                "topology",
-                "algebra"
-            ],
-            "provider": "semantic_scholar"
-        },
-        {
-            "name": "engineering",
-            "keywords": [
-                "design",
-                "system",
-                "control",
-                "material",
-                "process",
-                "mechanical"
-            ],
-            "provider": "semantic_scholar"
-        }
-    ],
+        "fallback_order": [
+            "nvidia",
+            "openai"
+        ]
+    },
     "algorithm": {
         "decision_thresholds": {
             "confidence_norm_factor": 10,
@@ -125,8 +65,18 @@
             "stoplist": []
         },
         "domain_resolution": {
-            "deterministic_threshold": 0.7,
-            "llm_threshold": 0.6
+            "allowed_domains": [
+                "biomedical",
+                "computer_science",
+                "physics",
+                "chemistry",
+                "mathematics",
+                "engineering"
+            ],
+            "llm_order": [
+                "openai",
+                "nvidia"
+            ]
         },
         "indirect_path": {
             "enabled": true,

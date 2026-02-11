@@ -14,7 +14,6 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.storage.models import SearchQuery, SearchQueryRun
-from app.domains import resolve_domain, DomainResolverConfig
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +80,6 @@ def get_or_create_search_query(
     job_id: int,
     session: Session,
     query_text: str = "",
-    llm_client: Optional[Any] = None,
     config: Optional[QueryOrchestratorConfig] = None
 ) -> SearchQuery:
     """
@@ -92,7 +90,6 @@ def get_or_create_search_query(
         job_id: Job ID
         session: SQLAlchemy session
         query_text: Optional custom query text (derived from hypothesis if empty)
-        llm_client: LLM client for domain resolution
         config: QueryOrchestratorConfig (created if None)
     
     Returns:
@@ -119,23 +116,13 @@ def get_or_create_search_query(
         target = hypothesis.get("target", "")
         query_text = f"relationship between {source} and {target}"
     
-    # Attempt domain resolution
-    domain_config = DomainResolverConfig()
-    resolved_domain, domain_confidence = resolve_domain(
-        hypothesis, llm_client, domain_config
-    )
-    
-    logger.info(
-        f"Resolved domain for hypothesis {hypothesis_signature}: "
-        f"{resolved_domain} (confidence={domain_confidence:.2f})"
-    )
+    # Inherit domain from hypothesis (Domain Resolution Contract)
+    resolved_domain = hypothesis.get("domain")
     
     # Capture current configuration snapshot
     config_snapshot = {
         "signature_length": config.signature_length,
         "initial_reputation": config.initial_reputation,
-        "domain_resolver_threshold": domain_config.deterministic_threshold,
-        "llm_threshold": domain_config.llm_threshold,
         "timestamp": datetime.utcnow().isoformat()
     }
     

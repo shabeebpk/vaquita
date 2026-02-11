@@ -106,7 +106,7 @@ class FetchService:
                 continue
             
             search_query = get_or_create_search_query(
-                hyp, job_id, session, llm_client=self.llm_client, config=query_config
+                hyp, job_id, session, config=query_config
             )
             
             reputation = search_query.reputation_score
@@ -124,7 +124,7 @@ class FetchService:
         )
         
         # Take top-K
-        selected = candidates[:self.fetch_config.top_k_hypotheses]
+        selected = candidates[:fetch_config.top_k_hypotheses]
         logger.info(f"Selected {len(selected)} hypotheses for fetching \n\n\n {selected} \n\n\n")
         
         return [(h, q) for h, q, _ in selected]

@@ -112,7 +112,7 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
     retry_kwargs={"max_retries": 3, "countdown": 20}
 )
 def extract_stage(self, job_id: int, file_id: int):
-    """Extracts text from a single File and saves it as an IngestionSource."""
+    """Extraction of text from a single File and saves it as an IngestionSource."""
     from app.storage.models import File, IngestionSource, IngestionSourceType
     from app.ingestion.extractor import extract_text_from_file
     
@@ -234,7 +234,7 @@ def ingest_stage(self, job_id: int):
     retry_backoff=True
 )
 def triple_stage(self, job_id: int):
-    """Extracts facts (triples) from ingested TextBlocks."""
+    """Triple extraction of facts from ingested TextBlocks."""
     from app.triples.processor import process_job_triples
     
     publish_event({"job_id": job_id, "stage": "triples", "status": "started"})
@@ -677,7 +677,7 @@ def fetch_stage(self, job_id: int):
     from app.graphs.persistence import get_semantic_graph
     from app.path_reasoning.persistence import get_hypotheses
     from app.fetching.service import FetchService
-    from app.llm.service import get_llm_service
+    from app.llm import get_llm_service
     
     publish_event({"job_id": job_id, "stage": "fetch", "status": "started"})
     

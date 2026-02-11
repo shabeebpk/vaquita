@@ -25,11 +25,15 @@ logger = logging.getLogger(__name__)
 
 # ===== Pydantic Models =====
 
-class DomainDefinition(BaseModel):
-    """Single domain definition with keywords and provider."""
-    name: str
-    keywords: List[str]
-    provider: str = "semantic_scholar"
+class LLMProviderPolicy(BaseModel):
+    """Policy for a single LLM provider."""
+    active: bool = True
+
+
+class LLMPolicy(BaseModel):
+    """Global LLM policy and fallback configuration."""
+    providers: Dict[str, LLMProviderPolicy] = Field(default_factory=dict)
+    fallback_order: List[str] = Field(default_factory=list)
 
 
 class DecisionThresholds(BaseModel):
@@ -96,9 +100,9 @@ class PathReasoningDefaults(BaseModel):
 
 
 class DomainResolution(BaseModel):
-    """Domain resolution thresholds."""
-    deterministic_threshold: float = 0.7
-    llm_threshold: float = 0.6
+    """Domain resolution parameters for LLM-based classification."""
+    allowed_domains: List[str] = Field(default_factory=list)
+    llm_order: List[str] = Field(default_factory=list)
 
 
 class IndirectPath(BaseModel):
@@ -143,16 +147,16 @@ class QueryOrchestrator(BaseModel):
 
 class AdminPolicy(BaseModel):
     """Root AdminPolicy model."""
-    allowed_domains: List[DomainDefinition]
+    llm: LLMPolicy = Field(default_factory=LLMPolicy)
     algorithm: Algorithm = Field(default_factory=Algorithm)
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
     decision_provider: str = "rule_based"
     
-    @field_validator('allowed_domains')
+    @field_validator('algorithm')
     @classmethod
-    def validate_domains(cls, v):
-        if not v:
-            raise ValueError("At least one domain must be defined")
+    def validate_algorithm(cls, v):
+        if not v.domain_resolution.allowed_domains:
+            raise ValueError("At least one domain must be defined in domain_resolution.allowed_domains")
         return v
 
 
@@ -175,7 +179,7 @@ def load_admin_policy() -> AdminPolicy:
             data = json.load(f)
         
         policy = AdminPolicy(**data)
-        logger.info(f"Loaded AdminPolicy: {len(policy.allowed_domains)} domains, provider={policy.decision_provider}")
+        logger.info(f"Loaded AdminPolicy with decision_provider={policy.decision_provider}")
         return policy
         
     except Exception as e:

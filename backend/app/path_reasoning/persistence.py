@@ -55,9 +55,22 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
 
     Returns the number of rows inserted.
     """
+    from app.llm import get_llm_service
+    from app.domains.resolver import resolve_domain
+    from app.storage.models import Job
+    
+    llm_client = get_llm_service()
+    
     inserted = 0
     with Session(engine) as session:
+        # Load job config for override check
+        job = session.query(Job).filter(Job.id == job_id).first()
+        job_config = job.job_config if job else {}
+        
         for h in hypotheses:
+            # Domain Resolution Contract: runs once before persistence
+            domain = resolve_domain(h, job_config, llm_client)
+            
             row = Hypothesis(
                 job_id=job_id,
                 source=h.get("source"),
@@ -65,6 +78,7 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
                 path=h.get("path", []),
                 predicates=h.get("predicates", []),
                 explanation=h.get("explanation", ""),
+                domain=domain,
                 confidence=int(h.get("confidence", 0)),
                 mode=h.get("mode", "explore"),
                 query_id=query_id,
@@ -109,6 +123,7 @@ def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejec
                 "path": r.path,
                 "predicates": r.predicates,
                 "explanation": r.explanation,
+                "domain": r.domain,
                 "confidence": r.confidence,
                 "mode": r.mode,
                 "mode": r.mode,
