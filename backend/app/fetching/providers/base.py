@@ -12,6 +12,7 @@ never returning more papers than requested batch_size.
 import logging
 import os
 from typing import Dict, Any, List, Optional
+from app.config.job_config import JobConfig
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
@@ -20,23 +21,21 @@ logger = logging.getLogger(__name__)
 class ProviderConfig:
     """Global configuration for all providers."""
     
-    def __init__(self):
-        from app.config.system_settings import system_settings
-        """Initialize the base provider with configuration from AdminPolicy."""
+    def __init__(self, job_config: Optional[JobConfig] = None):
+        """Initialize the base provider with configuration from AdminPolicy and JobConfig."""
         from app.config.admin_policy import admin_policy
         
-        fp = admin_policy.query_orchestrator.fetch_params
+        qo = admin_policy.query_orchestrator
+        fp = qo.fetch_params
         self.timeout = fp.timeout_seconds
-        self.results_limit = fp.results_limit
         self.retry_attempts = fp.retry_attempts
         
-        # Note: enabled_providers is now managed by the orchestrator, not individual ProviderConfig
-        # For backward compatibility with existing PaperProvider, we'll map results_limit to batch_size
-        self.batch_size = self.results_limit 
+        # batch_size comes from AdminPolicy (system-wide default)
+        self.batch_size = qo.fetch_batch_size
         
         logger.info(
-            f"ProviderConfig initialized: "
-            f"timeout={self.timeout}s, results_limit={self.results_limit}, retries={self.retry_attempts}"
+            f"ProviderConfig initialized (AdminPolicy): "
+            f"timeout={self.timeout}s, batch_size={self.batch_size}, retries={self.retry_attempts}"
         )
 
 

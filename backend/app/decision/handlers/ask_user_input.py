@@ -53,9 +53,9 @@ class AskUserInputHandler(Handler):
         if use_llm:
             try:
                 # Load prompt template using centralized loader
-                from app.config.system_settings import system_settings
+                # from app.config.system_settings import system_settings # Removed as admin_policy is used
                 prompt_template = load_prompt(
-                    system_settings.CLARIFICATION_PROMPT_FILE,
+                    admin_policy.prompt_assets.clarification_question,
                     fallback=CLARIFICATION_FALLBACK
                 )
                 
@@ -80,15 +80,15 @@ class AskUserInputHandler(Handler):
                 logger.warning(f"LLM question generation failed for job {job_id}; falling back to template: {e}")
         
         # Template-based fallback
-        from app.config.system_settings import system_settings
+        # from app.config.system_settings import system_settings # Removed as admin_policy is used
         ambiguity_score = measurements.get("ambiguity_score", 0.0)
         
-        if ambiguity_score > 0.7:
-            return load_prompt(system_settings.CLARIFICATION_HIGH_PROMPT_FILE)
-        elif ambiguity_score > 0.5:
-            return load_prompt(system_settings.CLARIFICATION_MEDIUM_PROMPT_FILE)
+        if ambiguity_score >= 0.8:
+            return load_prompt(admin_policy.prompt_assets.clarification_high)
+        elif ambiguity_score >= 0.4:
+            return load_prompt(admin_policy.prompt_assets.clarification_medium)
         else:
-            return load_prompt(system_settings.CLARIFICATION_LOW_PROMPT_FILE)
+            return load_prompt(admin_policy.prompt_assets.clarification_low)
     
     def handle(
         self,

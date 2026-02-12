@@ -14,6 +14,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.storage.models import SearchQuery, SearchQueryRun
+from app.config.job_config import JobConfig
 
 logger = logging.getLogger(__name__)
 
@@ -21,16 +22,19 @@ logger = logging.getLogger(__name__)
 class QueryOrchestratorConfig:
     """Configuration for query orchestration."""
     
-    def __init__(self, job_config: dict = None):
+    def __init__(self, job_config: Optional[JobConfig] = None):
         """
-        Initialize config from AdminPolicy.
+        Initialize config from JobConfig or AdminPolicy.
         
         Args:
-            job_config: Deprecated, kept for backward compatibility.
+            job_config: Optional[JobConfig] instance.
         """
         from app.config.admin_policy import admin_policy
-        
         qo = admin_policy.query_orchestrator
+
+        # If job_config is passed as a dict for legacy reasons, convert it
+        if job_config and isinstance(job_config, dict):
+            job_config = JobConfig(**job_config)
         
         # Max signature length for hypothesis_signature
         self.signature_length = int(qo.signature_length)

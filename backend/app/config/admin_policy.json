@@ -11,7 +11,12 @@
         "fallback_order": [
             "nvidia",
             "openai"
-        ]
+        ],
+        "defaults": {
+            "model": "gpt-4o",
+            "temperature": 0.0,
+            "max_tokens": 1000
+        }
     },
     "algorithm": {
         "decision_thresholds": {
@@ -60,9 +65,7 @@
         },
         "path_reasoning_defaults": {
             "max_hops": 4,
-            "allow_len3": true,
-            "seeds": [],
-            "stoplist": []
+            "allow_len3": true
         },
         "domain_resolution": {
             "allowed_domains": [
@@ -91,15 +94,25 @@
         "initial_reputation": 0,
         "exhaustion_decay": -5,
         "max_reuse_attempts": 3,
-        "fetch_batch_size": 1,
         "fetch_providers": "semantic_scholar",
+        "fetch_batch_size": 1,
+        "results_limit": 10,
         "top_k_hypotheses": 1,
         "min_reputation": -10,
         "fetch_params": {
-            "results_limit": 10,
             "timeout_seconds": 30,
             "retry_attempts": 3
         }
+    },
+    "prompt_assets": {
+        "domain_resolver": "domain_resolver.txt",
+        "triple_extraction": "triple_extraction.txt",
+        "decision_llm": "decision_llm.txt",
+        "clarification_question": "clarification_question.txt",
+        "user_text_classifier": "user_text_classifier.txt",
+        "clarification_high": "clarification_high_ambiguity.txt",
+        "clarification_medium": "clarification_medium_ambiguity.txt",
+        "clarification_low": "clarification_low_ambiguity.txt"
     },
     "decision_provider": "rule_based"
 }

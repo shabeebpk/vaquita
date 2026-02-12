@@ -1,22 +1,16 @@
 {
-    "domain": null,
+    "domain": "biomedical",
     "focus_areas": [],
-    "excluded_topics": [],
-    "preferred_evidence_type": null,
-    "reasoning_mode": "balanced",
-    "max_papers_for_job": null,
+    "query_config": {
+        "query_expansion_terms": 3
+    },
+    "path_reasoning_config": {
+        "seeds": [],
+        "stoplist": []
+    },
     "expert_settings": {
         "assumptions": [],
         "preferred_predicates": [],
-        "causal_bias": false,
-        "confidence_prior": 0.5
-    },
-    "query_config": {
-        "query_expansion_terms": [],
-        "query_penalty_terms": [],
-        "boost_keywords": [],
-        "penalty_keywords": [],
-        "path_reasoning_seeds": [],
-        "path_reasoning_stoplist": []
+        "excluded_entities": []
     }
 }

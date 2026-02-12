@@ -12,6 +12,7 @@ from celery.exceptions import MaxRetriesExceededError
 
 from app.storage.db import engine
 from app.storage.models import Job, IngestionSource, IngestionSourceType, DecisionResult, ConversationMessage, MessageRole, MessageType
+from app.config.job_config import JobConfig
 from events import publish_event
 
 logger = logging.getLogger(__name__)
@@ -425,10 +426,13 @@ def path_reasoning_stage(self, job_id: int):
         if not persisted_graph:
             raise ValueError("Semantic graph not found for reasoning")
             
-        # Reasoning params from AdminPolicy
-        seeds = admin_policy.algorithm.path_reasoning_defaults.seeds
+        # Load and validate Job Configuration
+        job_config = JobConfig(**(job.job_config or {}))
+            
+        # Reasoning params: System invariants from AdminPolicy, user tuning from JobConfig
+        seeds = job_config.path_reasoning_config.seeds
+        stoplist = set(job_config.path_reasoning_config.stoplist)
         allow_len3 = admin_policy.algorithm.path_reasoning_defaults.allow_len3
-        stoplist = set(admin_policy.algorithm.path_reasoning_defaults.stoplist)
 
         hypotheses = run_path_reasoning(
             persisted_graph,
@@ -703,7 +707,10 @@ def fetch_stage(self, job_id: int):
                 session.commit()
             return
 
-        FetchService(llm_client=get_llm_service()).execute_fetch_more(job_id, passed, session)
+        # Load and validate Job Configuration
+        job_config = JobConfig(**(job.job_config or {}))
+
+        FetchService(llm_client=get_llm_service(), job_config=job_config).execute_fetch_more(job_id, passed, session)
         
         if verify_fetch_sources_ready(job_id, session):
             with Session(engine) as session:

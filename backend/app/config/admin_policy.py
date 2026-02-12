@@ -30,10 +30,18 @@ class LLMProviderPolicy(BaseModel):
     active: bool = True
 
 
+class LLMDefaults(BaseModel):
+    """System-level default parameters for all LLM calls."""
+    model: str = "gpt-4o"
+    temperature: float = 0.0
+    max_tokens: int = 1000
+
+
 class LLMPolicy(BaseModel):
     """Global LLM policy and fallback configuration."""
     providers: Dict[str, LLMProviderPolicy] = Field(default_factory=dict)
     fallback_order: List[str] = Field(default_factory=list)
+    defaults: LLMDefaults = Field(default_factory=LLMDefaults)
 
 
 class DecisionThresholds(BaseModel):
@@ -95,8 +103,6 @@ class PathReasoningDefaults(BaseModel):
     """Path reasoning and hypothesis generation parameters."""
     max_hops: int = 4
     allow_len3: bool = True
-    seeds: List[str] = []
-    stoplist: List[str] = []
 
 
 class DomainResolution(BaseModel):
@@ -127,7 +133,6 @@ class Algorithm(BaseModel):
 
 class FetchParams(BaseModel):
     """Fetch provider parameters."""
-    results_limit: int = 10
     timeout_seconds: int = 30
     retry_attempts: int = 3
 
@@ -138,11 +143,26 @@ class QueryOrchestrator(BaseModel):
     initial_reputation: int = 0
     exhaustion_decay: int = -5
     max_reuse_attempts: int = 3
-    fetch_batch_size: int = 1
     fetch_providers: str = "semantic_scholar"
+    fetch_batch_size: int = 1
+    results_limit: int = 10
     top_k_hypotheses: int = 1
     min_reputation: int = -10
     fetch_params: FetchParams = Field(default_factory=FetchParams)
+
+
+class PromptAssets(BaseModel):
+    """System-level prompt template filenames."""
+    domain_resolver: str = "domain_resolver.txt"
+    triple_extraction: str = "triple_extraction.txt"
+    decision_llm: str = "decision_llm.txt"
+    clarification_question: str = "clarification_question.txt"
+    user_text_classifier: str = "user_text_classifier.txt"
+    clarification_high: str = "clarification_high_ambiguity.txt"
+    clarification_medium: str = "clarification_medium_ambiguity.txt"
+    clarification_low: str = "clarification_low_ambiguity.txt"
+
+
 
 
 class AdminPolicy(BaseModel):
@@ -150,6 +170,7 @@ class AdminPolicy(BaseModel):
     llm: LLMPolicy = Field(default_factory=LLMPolicy)
     algorithm: Algorithm = Field(default_factory=Algorithm)
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
+    prompt_assets: PromptAssets = Field(default_factory=PromptAssets)
     decision_provider: str = "rule_based"
     
     @field_validator('algorithm')

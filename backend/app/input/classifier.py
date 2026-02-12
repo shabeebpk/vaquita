@@ -97,8 +97,8 @@ class TextClassifier:
 
         # 1. Classification via LLM
         try:
-            from app.config.system_settings import system_settings
-            prompt_template = load_prompt(system_settings.USER_CLASSIFIER_PROMPT_FILE)
+            from app.config.admin_policy import admin_policy
+            prompt_template = load_prompt(admin_policy.prompt_assets.user_text_classifier)
             prompt = prompt_template.format(text=text)
             
             response_text = self.llm.generate(prompt).strip()

@@ -4,6 +4,7 @@ import json
 import logging
 import copy
 from typing import Dict, Any
+from app.config.job_config import JobConfig
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,12 @@ def load_default_job_config() -> Dict[str, Any]:
         with open(config_path, "r") as f:
             config = json.load(f)
             
-        # Basic Validation: Ensure at least one known key exists
-        if "query_config" not in config:
-            raise ValueError(f"Default config missing expected key: query_config")
+        # Validate and convert to model
+        validated = JobConfig(**config)
             
-        # Return deep copy to prevent mutation
-        return copy.deepcopy(config)
+        # Return dict copy back for existing legacy callers if needed, 
+        # but ensure it came through the typed model.
+        return validated.model_dump()
         
     except Exception as e:
         logger.error(f"CRITICAL: Failed to load default job config: {e}")

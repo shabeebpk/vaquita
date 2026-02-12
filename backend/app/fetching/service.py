@@ -30,6 +30,7 @@ from app.fetching.query_orchestrator import (
     should_run_query, record_search_run, QueryOrchestratorConfig,
     get_all_fetched_ids_for_job
 )
+from app.config.job_config import JobConfig
 from app.fetching.providers import (
     select_provider_for_domain, ProviderConfig, get_provider
 )
@@ -44,36 +45,46 @@ logger = logging.getLogger(__name__)
 class FetchServiceConfig:
     """Configuration for fetch service."""
     
-    def __init__(self, job_config: dict = None):
+    def __init__(self, job_config: Optional[JobConfig] = None):
         """
-        Initialize config from AdminPolicy.
+        Initialize config from JobConfig or AdminPolicy.
         
         Args:
-            job_config: Deprecated, kept for backward compatibility.
+            job_config: Optional[JobConfig] instance.
         """
+        if job_config and isinstance(job_config, dict):
+            job_config = JobConfig(**job_config)
         from app.config.admin_policy import admin_policy
         
         qo = admin_policy.query_orchestrator
         
         # Max hypotheses to fetch for in one FETCH_MORE cycle
+        qo = admin_policy.query_orchestrator
+        
+        # System-wide defaults from AdminPolicy
+        self.fetch_batch_size = int(qo.fetch_batch_size)
         self.top_k_hypotheses = int(qo.top_k_hypotheses)
         
         # Min reputation to consider hypothesis for fetch
         self.min_reputation_for_fetch = int(qo.min_reputation)
         
         logger.debug(
-            f"FetchServiceConfig loaded from AdminPolicy: "
+            f"FetchServiceConfig initialized (AdminPolicy): "
             f"top_k={self.top_k_hypotheses}, "
-            f"min_reputation={self.min_reputation_for_fetch}"
+            f"min_reputation={self.min_reputation_for_fetch}, "
+            f"batch_size={self.fetch_batch_size}"
         )
 
 
 class FetchService:
     """Main FETCH_MORE orchestrator service."""
     
-    def __init__(self, llm_client: Optional[Any] = None):
+    def __init__(self, llm_client: Optional[Any] = None, job_config: Optional[JobConfig] = None):
+        if job_config and isinstance(job_config, dict):
+            job_config = JobConfig(**job_config)
+            
         self.llm_client = llm_client
-        self.provider_config = ProviderConfig()
+        self.provider_config = ProviderConfig(job_config=job_config)
         self.fingerprint_config = FingerprintConfig()
         
         logger.info("FetchService initialized")

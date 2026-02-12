@@ -52,8 +52,8 @@ def llm_domain_resolution(
     domains_str = ", ".join(config.allowed_domains)
     
     # Load prompt contract
-    from app.config.system_settings import system_settings
-    prompt_file = system_settings.DOMAIN_RESOLVER_PROMPT_FILE
+    from app.config.admin_policy import admin_policy
+    prompt_file = admin_policy.prompt_assets.domain_resolver
     template = load_prompt(
         prompt_file, 
         fallback="Classify the following hypothesis domain. Allowed domains: {domains}. "

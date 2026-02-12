@@ -32,9 +32,9 @@ class TripleExtractor:
         self.llm_service = get_llm_service()
         
         # Load prompt template using the centralized loader
-        from app.config.system_settings import system_settings
+        from app.config.admin_policy import admin_policy
         self.prompt_template = load_prompt(
-            system_settings.TRIPLE_EXTRACTION_PROMPT_FILE,
+            admin_policy.prompt_assets.triple_extraction,
             fallback=TRIPLE_EXTRACTION_FALLBACK
         )
 

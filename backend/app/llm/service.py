@@ -63,9 +63,9 @@ class LLMService:
         """Factory for provider instances mapping system credentials to the class."""
         # Policy-driven default parameters
         common_kwargs = {
-            "model": self.settings.LLM_MODEL,
-            "temperature": self.settings.LLM_TEMPERATURE,
-            "max_tokens": self.settings.LLM_MAX_TOKENS
+            "model": self.policy.defaults.model,
+            "temperature": self.policy.defaults.temperature,
+            "max_tokens": self.policy.defaults.max_tokens
         }
 
         # Dynamically collect credentials based on provider's declared needs

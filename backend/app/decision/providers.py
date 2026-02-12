@@ -168,9 +168,9 @@ class LLMDecisionProvider(DecisionProvider):
         from app.llm import get_llm_service
         self.llm_service = get_llm_service()
         # Load prompt template using centralized loader
-        from app.config.system_settings import system_settings
+        from app.config.admin_policy import admin_policy
         self.prompt_template = load_prompt(
-            system_settings.DECISION_LLM_PROMPT_FILE,
+            admin_policy.prompt_assets.decision_llm,
             fallback=DECISION_LLM_FALLBACK
         )
         logger.info("LLMDecisionProvider initialized (using global LLM service)")
