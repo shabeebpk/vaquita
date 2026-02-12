@@ -104,6 +104,27 @@
             "retry_attempts": 3
         }
     },
+    "fetch_apis": {
+        "providers": {
+            "semantic_scholar": {
+                "active": true
+            }
+        },
+        "domain_provider_order": {
+            "biomedical": [
+                "semantic_scholar"
+            ],
+            "computer_science": [
+                "semantic_scholar"
+            ],
+            "physics": [
+                "semantic_scholar"
+            ],
+            "default": [
+                "semantic_scholar"
+            ]
+        }
+    },
     "prompt_assets": {
         "domain_resolver": "domain_resolver.txt",
         "triple_extraction": "triple_extraction.txt",

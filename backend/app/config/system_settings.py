@@ -26,6 +26,8 @@ class SystemSettings(BaseSettings):
     NVIDIA_BASE_URL: Optional[str] = Field(None)
     NVIDIA_API_KEY: Optional[str] = Field(None)
     OPENAI_API_KEY: Optional[str] = Field(None)
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = Field(None)
+    SEMANTIC_SCHOLAR_URL: str = Field("https://api.semanticscholar.org/graph/v1/paper/search")
 
 
 # Singleton instance

@@ -707,10 +707,9 @@ def fetch_stage(self, job_id: int):
                 session.commit()
             return
 
-        # Load and validate Job Configuration
-        job_config = JobConfig(**(job.job_config or {}))
-
-        FetchService(llm_client=get_llm_service(), job_config=job_config).execute_fetch_more(job_id, passed, session)
+        from app.fetching.service import get_fetch_service
+        fetch_service = get_fetch_service()
+        fetch_service.execute_fetch_stage(job_id, passed, session)
         
         if verify_fetch_sources_ready(job_id, session):
             with Session(engine) as session:

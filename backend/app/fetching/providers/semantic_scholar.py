@@ -1,140 +1,105 @@
 """
-Semantic Scholar paper provider with batch size enforcement.
-
-Simple reference implementation demonstrating batch-limited fetching.
-Fetches papers from Semantic Scholar API, respecting FETCH_BATCH_SIZE limit.
-
-No pagination, no retries, no extra enrichment—just basic batch-limited fetching.
+Semantic Scholar paper provider with authentication and rate-limiting.
 """
 import logging
+import time
 from typing import Dict, Any, List, Optional
 import requests
 
-from app.fetching.providers.base import PaperProvider, ProviderConfig, PaperProviderError
+from app.fetching.providers.base import BaseFetchProvider
 
 logger = logging.getLogger(__name__)
 
+class SemanticScholarProvider(BaseFetchProvider):
+    """
+    Semantic Scholar provider with API Key auth and strict rate limiting (1 req/sec).
+    """
+    
+    def __init__(self, credentials: Optional[Dict[str, Any]] = None):
+        super().__init__(credentials)
+        self.api_key = self.credentials.get("api_key")
+        self.base_url = self.credentials.get("base_url", "https://api.semanticscholar.org/graph/v1/paper/search")
+        self._last_call_time = 0.0
+    
+    def _wait_for_rate_limit(self):
+        """Simple rate limiting: 1 request per second."""
+        elapsed = time.time() - self._last_call_time
+        if elapsed < 1.0:
+            logger.debug(f"SemanticScholarProvider: rate limiting, sleeping {1.0 - elapsed:.2f}s")
+            time.sleep(1.0 - elapsed)
+        self._last_call_time = time.time()
 
-class SemanticScholarProvider(PaperProvider):
-    """
-    Simple reference implementation: Semantic Scholar provider.
-    
-    Demonstrates correct batch-limited fetching:
-    - Request exactly batch_size results from API
-    - Return only basic metadata fields
-    - No pagination, no retries, no extra logic
-    """
-    
-    def __init__(self, config: Optional[ProviderConfig] = None):
-        super().__init__(config)
-        self.name = "semantic_scholar"
-        self.base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    
-    def fetch(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def fetch(self, query: str, limit: int) -> List[Dict[str, Any]]:
         """
-        Fetch papers from Semantic Scholar with strict batch size enforcement.
-        
-        Simple reference implementation:
-        - Single API call with batch_size limit
-        - Return only basic metadata (title, abstract, authors, year, venue)
-        - No pagination, no retries, no enrichment
+        Fetch papers from Semantic Scholar.
         
         Args:
-            params: Dict with 'query', optionally 'domain', 'batch_size'
-        
-        Returns:
-            List of papers (len <= batch_size)
+            query: Search string.
+            limit: Max results (fetch_batch_size).
         """
-        query = params.get("query", "")
-        batch_size = self._get_batch_size(params)
-        
         if not query:
-            logger.warning("SemanticScholarProvider: no query provided")
             return []
         
+        self._wait_for_rate_limit()
+        
+        headers = {
+            "User-Agent": "MainProject-FETCH-More-Pipeline",
+            "Accept": "application/json"
+        }
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+            
+        api_params = {
+            "query": query,
+            "limit": limit,
+            "fields": "title,abstract,authors,year,venue,externalIds,url"
+        }
+        
+        logger.info(f"SemanticScholarProvider: fetching '{query}' (limit={limit})")
+        
         try:
-            # CRITICAL: Request exactly batch_size results from API
-            api_params = {
-                "query": query,
-                "limit": batch_size,  # Enforce batch_size at API level
-                "fields": "title,abstract,authors,year,venue,externalIds,url"
-            }
-            
-            logger.debug(f"SemanticScholarProvider requesting with batch_size={batch_size}")
-            
             response = requests.get(
                 self.base_url,
                 params=api_params,
-                timeout=self.config.timeout,
-                headers={
-                    "User-Agent": "MainProject-FETCH-More-Pipeline",
-                    "Accept": "application/json"
-                }
+                headers=headers,
+                timeout=30
             )
             response.raise_for_status()
             
             data = response.json()
-            papers = []
+            raw_papers = data.get("data", [])
             
-            for item in data.get("data", []):
-                if len(papers) >= batch_size:
-                    break  # Safety: never exceed batch_size
-                
-                # Extract title
-                title = item.get("title", "").strip()
-                if not title:
-                    continue  # Skip papers without title
-                
-                # Extract abstract
-                abstract = item.get("abstract", "")
-                
-                # Extract authors
-                authors = []
-                for author in item.get("authors", []):
-                    author_name = author.get("name")
-                    if author_name:
-                        authors.append({"name": author_name})
-                
-                # Extract year
-                year = item.get("year")
-                
-                # Extract venue
-                venue = item.get("venue", "")
-                
-                # Extract external IDs
-                external_ids = {}
-                external_data = item.get("externalIds", {})
-                if external_data:
-                    if "DOI" in external_data:
-                        external_ids["doi"] = external_data["DOI"]
-                    if "ArXiv" in external_data:
-                        external_ids["arxiv_id"] = external_data["ArXiv"]
-                    if "PubMed" in external_data:
-                        external_ids["pubmed_id"] = external_data["PubMed"]
-                
-                # Get Semantic Scholar ID
-                doi = external_ids.get("doi")
-                
-                paper = {
-                    "title": title,
-                    "abstract": abstract,
-                    "authors": authors,
-                    "year": year,
-                    "venue": venue,
-                    "doi": doi,
-                    "external_ids": external_ids,
-                    "source": "semantic_scholar",
-                    "pdf_url": item.get("url")
-                }
-                
-                papers.append(paper)
-            
-            logger.info(f"SemanticScholarProvider fetched {len(papers)}/{batch_size} papers for query: {query}")
-            return papers
-            
-        except requests.RequestException as e:
-            logger.error(f"SemanticScholarProvider fetch failed: {e}")
-            return []
+            return [self._normalize(p) for p in raw_papers]
         except Exception as e:
-            logger.error(f"SemanticScholarProvider unexpected error: {e}")
-            return []
+            logger.error(f"SemanticScholarProvider: API call failed: {e}")
+            raise
+
+    def _normalize(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize Semantic Scholar output to standard contract."""
+        external_data = item.get("externalIds", {}) or {}
+        
+        # Flatten external IDs
+        external_ids = {}
+        if "DOI" in external_data: external_ids["doi"] = external_data["DOI"]
+        if "ArXiv" in external_data: external_ids["arxiv_id"] = external_data["ArXiv"]
+        if "PubMed" in external_data: external_ids["pubmed_id"] = external_data["PubMed"]
+        if "CorpusId" in external_data: external_ids["corpus_id"] = external_data["CorpusId"]
+
+        # Ensure authors list of dicts
+        authors = []
+        for a in item.get("authors", []) or []:
+            name = a.get("name")
+            if name:
+                authors.append({"name": name})
+
+        return {
+            "title": item.get("title", "Untitled").strip(),
+            "abstract": item.get("abstract"),
+            "authors": authors,
+            "year": item.get("year"),
+            "venue": item.get("venue"),
+            "doi": external_ids.get("doi"),
+            "external_ids": external_ids,
+            "source": self.name,
+            "pdf_url": item.get("url")
+        }

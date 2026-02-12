@@ -137,6 +137,16 @@ class FetchParams(BaseModel):
     retry_attempts: int = 3
 
 
+class FetchProviderPolicy(BaseModel):
+    """Policy for a single Fetch provider."""
+    active: bool = True
+
+class FetchAPIPolicy(BaseModel):
+    """Configuration for fetch providers and their domain-specific priority."""
+    providers: Dict[str, FetchProviderPolicy] = Field(default_factory=dict)
+    domain_provider_order: Dict[str, List[str]] = Field(default_factory=dict)
+
+
 class QueryOrchestrator(BaseModel):
     """Query orchestrator configuration."""
     signature_length: int = 64
@@ -170,6 +180,7 @@ class AdminPolicy(BaseModel):
     llm: LLMPolicy = Field(default_factory=LLMPolicy)
     algorithm: Algorithm = Field(default_factory=Algorithm)
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
+    fetch_apis: FetchAPIPolicy = Field(default_factory=FetchAPIPolicy)
     prompt_assets: PromptAssets = Field(default_factory=PromptAssets)
     decision_provider: str = "rule_based"
     
