@@ -9,6 +9,7 @@ from app.storage.models import (
     Job, SearchQuery, SearchQueryRun, Paper, IngestionSource, 
     IngestionSourceType
 )
+from app.fetching.selection import select_top_diverse_leads
 from app.fetching.query_orchestrator import (
     get_or_create_search_query, should_run_query, 
     record_search_run, QueryOrchestratorConfig,
@@ -93,13 +94,11 @@ class FetchService:
         query_config = QueryOrchestratorConfig()
         
         # 2. Select top K passed hypotheses
-        # Sort by reputation_score descending
-        passed = [h for h in hypotheses if h.get("passed_filter", False)]
-        passed.sort(key=lambda x: x.get("reputation_score", 0), reverse=True)
-        targets = passed[:top_k]
+        # Use refined diversity algorithm (Grouped by Source-Target, Tiered Priority)
+        targets = select_top_diverse_leads(session, job_id, top_k, hypotheses)
         
         if not targets:
-            logger.warning("FetchService: No passed hypotheses to fetch for")
+            logger.warning("FetchService: No hypotheses (Passed or Promising) to fetch for")
             return
 
         # Load IDs for job-level dedup

@@ -696,20 +696,10 @@ def fetch_stage(self, job_id: int):
             raise ValueError("Semantic graph missing for fetch")
             
         hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0) or []
-        passed = [h for h in hypotheses if h.get("passed_filter", False)]
-
-        if not passed:
-            logger.warning("No passed hypotheses to fetch for")
-            publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "no_hypotheses"})
-            with Session(engine) as session:
-                job = session.query(Job).get(job_id)
-                job.status = "GRAPH_SEMANTIC_MERGED"
-                session.commit()
-            return
 
         from app.fetching.service import get_fetch_service
         fetch_service = get_fetch_service()
-        fetch_service.execute_fetch_stage(job_id, passed, session)
+        fetch_service.execute_fetch_stage(job_id, hypotheses, session)
         
         if verify_fetch_sources_ready(job_id, session):
             with Session(engine) as session:
