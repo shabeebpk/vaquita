@@ -84,6 +84,9 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
                 query_id=query_id,
                 passed_filter=h.get("passed_filter", False),
                 filter_reason=h.get("filter_reason", None),
+                triple_ids=h.get("triple_ids", []),
+                source_ids=h.get("source_ids", []),
+                block_ids=h.get("block_ids", []),
                 created_at=datetime.utcnow(),
             )
             session.add(row)
@@ -130,6 +133,9 @@ def get_hypotheses(job_id: int, limit: int = 100, offset: int = 0, include_rejec
                 "query_id": r.query_id,
                 "passed_filter": r.passed_filter,
                 "filter_reason": r.filter_reason,
+                "source_ids": r.source_ids,
+                "triple_ids": r.triple_ids,
+                "block_ids": r.block_ids,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             })
         return result

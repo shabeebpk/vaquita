@@ -177,24 +177,40 @@ def _rewrite_edges(
         text_to_canonical[node_text] = canonical
 
     # Rewrite edges with support aggregation, preserving all predicates
-    edge_dict: Dict[Tuple[str, str, str], int] = {}  # (subject, predicate, object) -> support
+    edge_dict: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     for edge in original_edges:
         subj = edge.get("subject", "")
-        pred = edge.get("predicate", "")  # preserve predicate as-is (never reinterpreted)
+        pred = edge.get("predicate", "")
         obj = edge.get("object", "")
         support = edge.get("support", 1)
+        
+        triple_ids = edge.get("triple_ids", [])
+        source_ids = edge.get("source_ids", [])
+        block_ids = edge.get("block_ids", [])
 
         # Rewrite to canonical nodes (or keep if not in merged set)
         new_subj = text_to_canonical.get(subj, subj)
         new_obj = text_to_canonical.get(obj, obj)
 
-        # Drop self-loops only; multiple predicates and neighbors per node are correct
+        # Drop self-loops only
         if new_subj == new_obj:
             logger.debug(f"Dropped self-loop: {new_subj} -[{pred}]-> {new_obj}")
             continue
 
         key = (new_subj, pred, new_obj)
-        edge_dict[key] = edge_dict.get(key, 0) + support
+        if key not in edge_dict:
+            edge_dict[key] = {
+                "support": 0,
+                "triple_ids": set(),
+                "source_ids": set(),
+                "block_ids": set(),
+            }
+        
+        meta = edge_dict[key]
+        meta["support"] += support
+        meta["triple_ids"].update(triple_ids)
+        meta["source_ids"].update(source_ids)
+        meta["block_ids"].update(block_ids)
 
     # Rebuild edge list
     rewritten = [
@@ -202,9 +218,12 @@ def _rewrite_edges(
             "subject": s,
             "predicate": p,
             "object": o,
-            "support": supp,
+            "support": m["support"],
+            "triple_ids": sorted(list(m["triple_ids"])),
+            "source_ids": sorted(list(m["source_ids"])),
+            "block_ids": sorted(list(m["block_ids"])),
         }
-        for (s, p, o), supp in edge_dict.items()
+        for (s, p, o), m in edge_dict.items()
     ]
 
     logger.info(f"Rewrote {len(original_edges)} edges into {len(rewritten)} after merging")

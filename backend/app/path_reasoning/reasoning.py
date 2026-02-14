@@ -64,8 +64,18 @@ def _graph_to_nx(semantic_graph: Dict) -> nx.DiGraph:
             data = G.edges[subj, obj]
             data.setdefault("predicates", []).append(pred)
             data.setdefault("supports", []).append(int(support))
+            data.setdefault("triple_ids_list", []).append(edge.get("triple_ids", []))
+            data.setdefault("source_ids_list", []).append(edge.get("source_ids", []))
+            data.setdefault("block_ids_list", []).append(edge.get("block_ids", []))
         else:
-            G.add_edge(subj, obj, predicates=[pred], supports=[int(support)])
+            G.add_edge(
+                subj, obj, 
+                predicates=[pred], 
+                supports=[int(support)],
+                triple_ids_list=[edge.get("triple_ids", [])],
+                source_ids_list=[edge.get("source_ids", [])],
+                block_ids_list=[edge.get("block_ids", [])]
+            )
 
     return G
 
@@ -219,6 +229,21 @@ def _build_hypothesis(path: List[str], G: nx.DiGraph, mode: str) -> Dict:
         explanation_parts.append(part)
     explanation = " then ".join(explanation_parts)
 
+    # Aggregate traceability IDs
+    triple_ids = set()
+    source_ids = set()
+    block_ids = set()
+    for i in range(len(path) - 1):
+        u = path[i]
+        v = path[i + 1]
+        data = G.edges.get((u, v), {})
+        for ids in data.get("triple_ids_list", []):
+            triple_ids.update(ids)
+        for ids in data.get("source_ids_list", []):
+            source_ids.update(ids)
+        for ids in data.get("block_ids_list", []):
+            block_ids.update(ids)
+
     hypothesis = {
         "source": path[0],
         "target": path[-1],
@@ -227,6 +252,9 @@ def _build_hypothesis(path: List[str], G: nx.DiGraph, mode: str) -> Dict:
         "explanation": explanation,
         "confidence": int(confidence),
         "mode": mode,
+        "triple_ids": sorted(list(triple_ids)),
+        "source_ids": sorted(list(source_ids)),
+        "block_ids": sorted(list(block_ids)),
     }
     return hypothesis
 

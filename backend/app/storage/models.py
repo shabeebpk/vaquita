@@ -318,6 +318,11 @@ class Hypothesis(Base):
     passed_filter = Column(Boolean, default=False, nullable=False)
     filter_reason = Column(JSONB, nullable=True)
     
+    # Traceability
+    source_ids = Column(JSONB, nullable=False)  # Union of all paper IDs involved in the path
+    triple_ids = Column(JSONB, nullable=False)  # Union of all triple IDs involved in the path
+    block_ids = Column(JSONB, nullable=False)   # Union of all block IDs involved in the path
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
