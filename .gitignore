@@ -1,6 +1,7 @@
 projenv/
 *.log
 /data/literature_uploads
+/data/literature_downloads
 pgdata/
 __pycache__/
 *.pyc

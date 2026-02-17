@@ -1,5 +1,6 @@
 projenv/
 uploads/
+downloads/
 __pycache__/
 *.pyc
 *.pyo

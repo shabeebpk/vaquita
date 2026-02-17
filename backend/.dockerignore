@@ -13,5 +13,6 @@ venv/
 .gitignore
 
 uploads/
+downloads/
 
 alembic/versions/__pycache__/
