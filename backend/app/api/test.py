@@ -8,7 +8,8 @@ from worker.stage_tasks import (
     ingest_stage, 
     structural_graph_stage, 
     path_reasoning_stage, 
-    fetch_stage
+    fetch_stage,
+    download_stage
 )
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/test", tags=["test"])
 async def trigger_stage(job_id: int, status: str):
     """
     Simple Test API: Manually update job status and trigger the corresponding Celery stage.
-    Supported statuses: READY_TO_INGEST, TRIPLES_EXTRACTED, GRAPH_SEMANTIC_MERGED, FETCH_QUEUED
+    Supported statuses: READY_TO_INGEST, TRIPLES_EXTRACTED, GRAPH_SEMANTIC_MERGED, FETCH_QUEUED, DOWNLOAD_QUEUED
     """
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -34,7 +35,8 @@ async def trigger_stage(job_id: int, status: str):
             "READY_TO_INGEST": ingest_stage,
             "TRIPLES_EXTRACTED": structural_graph_stage,
             "GRAPH_SEMANTIC_MERGED": path_reasoning_stage,
-            "FETCH_QUEUED": fetch_stage
+            "FETCH_QUEUED": fetch_stage,
+            "DOWNLOAD_QUEUED": download_stage
         }
         
         target_task = task_map.get(job.status)

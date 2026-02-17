@@ -79,34 +79,14 @@ def apply_signal_result(
     
     search_query.status = new_status
     
-    # ---------------------------------------------------------
-    # SIGNAL ATTRIBUTION
-    # ---------------------------------------------------------
-    # If positive signal:
-    #   fetched_paper_ids -> accepted_paper_ids
-    #   rejected_paper_ids = []
-    # If zero or negative signal:
-    #   fetched_paper_ids -> rejected_paper_ids
-    #   accepted_paper_ids = []
-    
-    # We must explicitly cast list to ensure it's JSON-serializable if it wasn't already
-    fetched_ids = list(search_query_run.fetched_paper_ids or [])
-    
     if signal_delta > 0:
-        search_query_run.accepted_paper_ids = fetched_ids
-        search_query_run.rejected_paper_ids = []
-        
         search_query.reputation_score += config.reputation_on_positive
         logger.info(
             f"SearchQuery {search_query.id}: reputation {old_reputation} → "
             f"{search_query.reputation_score} (positive signal)"
         )
-        logger.info(f"Run {search_query_run.id}: Attributed {len(fetched_ids)} papers to ACCEPTED.")
         
     else:  # Zero or Negative
-        search_query_run.accepted_paper_ids = []
-        search_query_run.rejected_paper_ids = fetched_ids
-        
         if signal_delta < 0:
             search_query.reputation_score += config.reputation_on_negative
             logger.info(
@@ -115,8 +95,6 @@ def apply_signal_result(
             )
         else:
             logger.info(f"SearchQuery {search_query.id}: reputation unchanged (zero signal)")
-            
-        logger.info(f"Run {search_query_run.id}: Attributed {len(fetched_ids)} papers to REJECTED.")
     
     search_query.updated_at = datetime.utcnow()
     

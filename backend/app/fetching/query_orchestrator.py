@@ -214,19 +214,16 @@ def get_all_fetched_ids_for_job(
     Returns:
         List of paper IDs
     """
-    # Flatten the fetched_paper_ids JSONB array from all runs for this job
-    # distinct() might be good if needed, but per-run logic should handle consistency
-    result = session.query(
-        func.jsonb_array_elements_text(SearchQueryRun.fetched_paper_ids)
-    ).filter(
-        SearchQueryRun.job_id == job_id
+    from app.storage.models import JobPaperEvidence
+    
+    result = session.query(JobPaperEvidence.paper_id).filter(
+        JobPaperEvidence.job_id == job_id
     ).all()
     
-    # helper returns tuples, convert to integers
     if not result:
         return []
         
-    return [int(row[0]) for row in result]
+    return [row.paper_id for row in result]
 
 
 def record_search_run(
@@ -234,9 +231,6 @@ def record_search_run(
     job_id: int,
     provider_used: str,
     reason: str,  # 'initial_attempt', 'reuse', 'expansion'
-    fetched_paper_ids: List[int],
-    accepted_paper_ids: List[int],
-    rejected_paper_ids: List[int],
     session: Session,
     config: Optional[QueryOrchestratorConfig] = None
 ) -> SearchQueryRun:
@@ -262,9 +256,7 @@ def record_search_run(
         job_id=job_id,
         provider_used=provider_used,
         reason=reason,
-        fetched_paper_ids=fetched_paper_ids,
-        accepted_paper_ids=accepted_paper_ids,
-        rejected_paper_ids=rejected_paper_ids,
+        # Paper IDs moved to JobPaperEvidence (Strategic Ledger)
         signal_delta=None  # Computed later during signal evaluation
     )
     
@@ -273,8 +265,7 @@ def record_search_run(
     
     logger.info(
         f"Recorded SearchQueryRun: {run.id} "
-        f"(query={search_query.id}, provider={provider_used}, "
-        f"fetched={len(fetched_paper_ids)}, accepted={len(accepted_paper_ids)})"
+        f"(query={search_query.id}, provider={provider_used})"
     )
     
     return run

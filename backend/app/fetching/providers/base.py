@@ -46,7 +46,7 @@ class BaseFetchProvider(ABC):
               "doi": str or None,
               "external_ids": {id_type: id_value, ...},
               "source": str,
-              "pdf_url": str or None
+              "pdf_url": str or None  # MUST be direct PDF download URL, not webpage
             }
             
         Raises:

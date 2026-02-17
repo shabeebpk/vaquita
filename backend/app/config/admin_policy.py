@@ -153,7 +153,6 @@ class QueryOrchestrator(BaseModel):
     initial_reputation: int = 0
     exhaustion_decay: int = -5
     max_reuse_attempts: int = 3
-    fetch_providers: str = "semantic_scholar"
     fetch_batch_size: int = 1
     results_limit: int = 10
     top_k_hypotheses: int = 1

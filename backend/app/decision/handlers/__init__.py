@@ -17,6 +17,7 @@ from app.decision.handlers import (
     ask_user_input,
     insufficient_signal,
     undecided,
+    strategic_download,
 )
 
 __all__ = [

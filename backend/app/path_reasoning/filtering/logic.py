@@ -8,8 +8,12 @@ the semantic graph.
 
 from typing import List, Dict, Set, Any, Tuple, Optional
 import logging
+import re
 import networkx as nx
 from dataclasses import dataclass, field
+from sqlalchemy.orm import Session
+from app.storage.models import JobPaperEvidence, Triple, IngestionSource
+from app.graphs.rules.node_types import classify_node
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +135,29 @@ RULES = [
 ]
 
 
+def is_low_confidence_rejection(hyp: Dict) -> bool:
+    """
+    Check if a hypothesis was rejected ONLY due to low confidence.
+    
+    A "promising" lead is one that passes structural and semantic rules
+    but fails the evidence threshold.
+    """
+    if hyp.get("passed_filter", False):
+        return False
+        
+    reasons = hyp.get("filter_reason", {})
+    if not reasons:
+        return False
+        
+    # Must have failed evidence_threshold
+    if "evidence_threshold" not in reasons:
+        return False
+        
+    # Must NOT have failed any other rule
+    # (If length is 1 and it's evidence_threshold, it's a pure confidence rejection)
+    return len(reasons) == 1
+
+
 def filter_hypotheses(
     hypotheses: List[Dict],
     semantic_graph: Dict,
@@ -176,3 +203,125 @@ def filter_hypotheses(
         processed.append(hyp)
 
     return processed
+
+
+def calculate_impact_scores(job_id: int, hypotheses: List[Dict], session: Session) -> None:
+    """
+    Calculate and update Impact Scores for all papers in the Strategic Ledger.
+    
+    Formula:
+    score = (hyp_ref_count) + (sum_of_confidence) + (new_entity_count)
+    
+    Context:
+    - Only hypotheses that are 'Passed' or 'Low Confidence' (promising) are used.
+    - Updated into JobPaperEvidence table for the job.
+    - Performance: Reuses existing database triples to avoid LLM cost.
+    """
+    from .logic import is_low_confidence_rejection # local avoid circular
+    
+    # 1. Filter hypotheses to relevant leads (Passed or Promising)
+    relevant_hypos = [
+        h for h in hypotheses 
+        if h.get("passed_filter", False) or is_low_confidence_rejection(h)
+    ]
+    
+    if not relevant_hypos:
+        logger.info(f"Job {job_id}: No passed or promising hypotheses to compute impact scores.")
+        return
+
+    # 2. Build Paper -> Impact Metrics map
+    # We want to know which paper supports which hypothesis.
+    paper_metrics: Dict[int, Dict[str, Any]] = {}  # paper_id -> {refs: 0, conf: 0.0}
+    
+    # Pre-fetch all Triples for these hypotheses for speed
+    all_triple_ids = []
+    for h in relevant_hypos:
+        all_triple_ids.extend(h.get("triple_ids", []))
+    
+    if not all_triple_ids:
+        return
+
+    # Map Triple ID -> Paper ID
+    # Triple -> IngestionSource -> paper:ID
+    triple_to_paper = {}
+    triples_data = session.query(
+        Triple.id, IngestionSource.source_ref
+    ).join(
+        IngestionSource, Triple.ingestion_source_id == IngestionSource.id
+    ).filter(
+        Triple.id.in_(list(set(all_triple_ids)))
+    ).all()
+    
+    for tid, s_ref in triples_data:
+        if s_ref.startswith("paper:"):
+            try:
+                pid = int(s_ref.split(":")[1])
+                triple_to_paper[tid] = pid
+            except (ValueError, IndexError):
+                continue
+    
+    # 3. Aggregate metrics from Hypotheses
+    for h in relevant_hypos:
+        conf = h.get("confidence", 0)
+        t_ids = h.get("triple_ids", [])
+        
+        # Unique papers referenced by this hypothesis
+        h_papers = {triple_to_paper[tid] for tid in t_ids if tid in triple_to_paper}
+        
+        for pid in h_papers:
+            if pid not in paper_metrics:
+                paper_metrics[pid] = {"refs": 0, "conf": 0.0, "entities": set()}
+            
+            paper_metrics[pid]["refs"] += 1
+            paper_metrics[pid]["conf"] += float(conf)
+
+    # 4. Calculate "New Entity Count" per paper
+    # Based on the Triples already extracted from its abstract.
+    # Strategic Investor: Evaluate ALL papers in JobPaperEvidence for this job.
+    ledger_entries = session.query(JobPaperEvidence).filter(
+        JobPaperEvidence.job_id == job_id
+    ).all()
+    
+    ledger_paper_ids = [e.paper_id for e in ledger_entries]
+    
+    # Get all entities from abstracts of these papers
+    # Concept: Only count "entity" type nodes in the subjects/objects
+    abstract_triples = session.query(
+        IngestionSource.source_ref, Triple.subject, Triple.object
+    ).join(
+        Triple, Triple.ingestion_source_id == IngestionSource.id
+    ).filter(
+        IngestionSource.job_id == job_id,
+        IngestionSource.source_ref.in_([f"paper:{pid}" for pid in ledger_paper_ids])
+    ).all()
+    
+    for s_ref, subj, obj in abstract_triples:
+        try:
+            pid = int(s_ref.split(":")[1])
+            if pid not in paper_metrics:
+                paper_metrics[pid] = {"refs": 0, "conf": 0.0, "entities": set()}
+            
+            if classify_node(subj) == "entity":
+                paper_metrics[pid]["entities"].add(subj)
+            if classify_node(obj) == "entity":
+                paper_metrics[pid]["entities"].add(obj)
+        except:
+            continue
+
+    # 5. Update Database (Strategic Ledger)
+    for entry in ledger_entries:
+        metrics = paper_metrics.get(entry.paper_id, {"refs": 0, "conf": 0.0, "entities": set()})
+        
+        entry.hypo_ref_count = metrics["refs"]
+        entry.cumulative_conf = metrics["conf"]
+        entry.entity_density = len(metrics["entities"])
+        
+        # Impact Score = refs + conf + entities
+        entry.impact_score = float(
+            entry.hypo_ref_count + 
+            entry.cumulative_conf + 
+            entry.entity_density
+        )
+        
+    session.commit()
+    logger.info(f"Job {job_id}: Updated Impact Scores for {len(ledger_entries)} papers in Strategic Ledger.")

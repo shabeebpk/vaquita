@@ -131,18 +131,51 @@ class FetchService:
                         run_fetched_ids.append(pid)
                         seen_ids.add(pid)
 
-                # 7. Record SearchQueryRun
-                record_search_run(
+                # 7. Record SearchQueryRun (Log only)
+                search_run = record_search_run(
                     search_query=search_query,
                     job_id=job_id,
                     provider_used=provider_name,
                     reason=reason,
-                    fetched_paper_ids=run_fetched_ids,
-                    accepted_paper_ids=accepted_ids, # Logic from old service: initially papers from providers are candidates
-                    rejected_paper_ids=rejected_ids, # matches old service record_search_run call
                     session=session,
                     config=query_config
                 )
+                
+                # 8. Update JobPaperEvidence (Strategic Ledger)
+                # We only add papers that are NEW to this job (not in seen_ids)
+                from app.storage.models import JobPaperEvidence
+                
+                all_found_ids = accepted_ids + rejected_ids
+                
+                for pid in all_found_ids:
+                    # Check if we already have evidence for this paper in this job
+                    # (seen_ids check above handles the bulk, but let's be safe/explicit if needed)
+                    # The requirement is: "new table only have rows that if the paper is unique entry to this job"
+                    
+                    # We already filtered run_fetched_ids to be unique to the job.
+                    # BUT accepted_ids/rejected_ids contain ALL from this run.
+                    # We should iterate over run_fetched_ids (which are the new ones).
+                    pass
+                
+                for pid in run_fetched_ids:
+                     # Double check uniqueness (though run_fetched_ids should be unique)
+                     exists = session.query(JobPaperEvidence).filter(
+                         JobPaperEvidence.job_id == job_id,
+                         JobPaperEvidence.paper_id == pid
+                     ).count() > 0
+                     
+                     if not exists:
+                         new_evidence = JobPaperEvidence(
+                             job_id=job_id,
+                             run_id=search_run.id,
+                             paper_id=pid,
+                             evaluated=False,
+                             impact_score=0.0,
+                             hypo_ref_count=0,
+                             cumulative_conf=0.0,
+                             entity_density=0
+                         )
+                         session.add(new_evidence)
 
                 # 8. Create IngestionSources
                 self._create_ingestion_sources(job_id, persisted, session)
@@ -212,8 +245,13 @@ class FetchService:
 
     def _create_ingestion_sources(self, job_id: int, papers: List[Paper], session: Session):
         """Create IngestionSource entries for new papers."""
+        logger.info(f"FetchService: Attempting to create ingestion sources for {len(papers)} papers")
+        created = 0
+        skipped = 0
         for paper in papers:
             if not paper.abstract:
+                logger.warning(f"FetchService: Paper {paper.id} has no abstract, skipping")
+                skipped += 1
                 continue
                 
             # Check if source already exists for this job
@@ -232,7 +270,9 @@ class FetchService:
                     processed=False
                 )
                 session.add(source)
+                created += 1
         session.flush()
+        logger.info(f"FetchService: Created {created} ingestion sources, skipped {skipped} (no abstract)")
 
 def get_fetch_service() -> FetchService:
     """Helper to get singleton instance."""

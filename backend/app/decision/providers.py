@@ -61,23 +61,33 @@ class RuleBasedDecisionProvider(DecisionProvider):
         if not config:
             config = DecisionConfig()  # defaults
             
-        total_count = measurements.get("total_hypothesis_count", 0)
         passed_count = measurements.get("passed_hypothesis_count", 0)
+        promising_count = measurements.get("promising_hypothesis_count", 0)
         
-        # Rule 1: Minimum threshold not met
-        if total_count < config.MINIMUM_HYPOTHESES_THRESHOLD:
+        # Rule 1: Insufficient Signal
+        # Total count check (minimum threshold) is now secondary to "at least one" signal.
+        # User: "no longer uses number of passed hypothesis as constraint for to be insufficiant_signal"
+        # "that is insufficiant only even if no hypothesis that filterout by just confidence is less"
+        is_insufficient = (passed_count == 0 and promising_count == 0)
+        
+        if is_insufficient:
             logger.info(
-                f"Total hypotheses {total_count} < threshold {config.MINIMUM_HYPOTHESES_THRESHOLD}: "
-                f"returning INSUFFICIENT_SIGNAL"
+                f"Insufficient signal: passed={passed_count}, promising={promising_count}. "
+                f"Returning INSUFFICIENT_SIGNAL"
             )
             return Decision.INSUFFICIENT_SIGNAL
         
-        # Rule 2: No passed hypotheses
-        if passed_count == 0:
-            logger.info("No passed hypotheses: returning INSUFFICIENT_SIGNAL")
-            return Decision.INSUFFICIENT_SIGNAL
-        
         # Extract measurements for decision logic
+        growth_score = measurements.get("growth_score", 0.0)
+        
+        # Rule 2: Strategic Targeted Download (Prioritize growth over halts)
+        if growth_score > 0:
+            logger.info(
+                f"Growth detected (score={growth_score:.3f}): "
+                f"returning STRATEGIC_DOWNLOAD_TARGETED"
+            )
+            return Decision.STRATEGIC_DOWNLOAD_TARGETED
+        
         max_norm_conf = measurements.get("max_normalized_confidence", 0.0)
         is_dominant = measurements.get("is_dominant_clear", False)
         max_paths_per_pair = measurements.get("max_paths_per_pair", 0)

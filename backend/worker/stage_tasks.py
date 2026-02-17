@@ -642,6 +642,10 @@ def handler_execution_stage(self, job_id: int):
                 logger.info(f"Handler for job {job_id} requested FETCH_QUEUED; triggering fetch stage.")
                 fetch_stage.delay(job_id)
             
+            elif status == "DOWNLOAD_QUEUED":
+                logger.info(f"Handler for job {job_id} requested DOWNLOAD_QUEUED; triggering download stage.")
+                download_stage.delay(job_id)
+            
             elif status == "COMPLETED":
                 logger.info(f"Job {job_id} reached terminal state: COMPLETED")
                 # Optimization: No next task needed
@@ -697,22 +701,68 @@ def fetch_stage(self, job_id: int):
             
         hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0) or []
 
-        from app.fetching.service import get_fetch_service
-        fetch_service = get_fetch_service()
-        fetch_service.execute_fetch_stage(job_id, hypotheses, session)
+        with Session(engine) as session:
+            from app.fetching.service import get_fetch_service
+            fetch_service = get_fetch_service()
+            fetch_service.execute_fetch_stage(job_id, hypotheses, session)
+            
+            # CRITICAL: Commit the session to persist all fetched data
+            session.commit()
         
-        if verify_fetch_sources_ready(job_id, session):
-            with Session(engine) as session:
+        with Session(engine) as session:
+            if verify_fetch_sources_ready(job_id, session):
                 job = session.query(Job).get(job_id)
                 job.status = "READY_TO_INGEST"
                 session.commit()
             
-            publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "sources_ready"})
-            # Chain back to start
-            ingest_stage.delay(job_id)
-        else:
-            publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "no_sources"})
+                publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "sources_ready"})
+                # Chain back to start
+                ingest_stage.delay(job_id)
+            else:
+                publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "no_sources"})
     
     except Exception as e:
         logger.error(f"Fetch stage failed for job {job_id}: {e}")
+        raise
+
+
+
+# ============================================================================
+# Stage 11: Strategic Downloading
+# ============================================================================
+
+@celery_app.task(
+    name="stage.download",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 3, "countdown": 60},
+    retry_backoff=True
+)
+def download_stage(self, job_id: int):
+    """Downloads papers prioritized by impact score."""
+    from app.fetching.downloader import get_paper_downloader
+    
+    publish_event({"job_id": job_id, "stage": "download", "status": "started"})
+    
+    with Session(engine) as session:
+        job = session.query(Job).get(job_id)
+        if not job or job.status != "DOWNLOAD_QUEUED":
+            logger.warning(f"Job {job_id} not in DOWNLOAD_QUEUED state (status={job.status if job else 'None'})")
+            return
+
+    try:
+        downloader = get_paper_downloader()
+        count = downloader.process_job_downloads(job_id)
+        
+        with Session(engine) as session:
+            job = session.query(Job).get(job_id)
+            # After downloading, we are ready to ingest the new PDFs
+            job.status = "READY_TO_INGEST"
+            session.commit()
+            
+        publish_event({"job_id": job_id, "stage": "download", "status": "completed", "papers_downloaded": count})
+        ingest_stage.delay(job_id)
+        
+    except Exception as e:
+        logger.error(f"Download stage failed for job {job_id}: {e}")
         raise

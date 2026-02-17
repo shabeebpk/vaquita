@@ -92,7 +92,13 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
             session.add(row)
             inserted += 1
         session.commit()
-    logger.info(f"Persisted {inserted} hypotheses for job {job_id}")
+    
+    # After persistence, update the Strategic Ledger with new Impact Scores
+    from app.path_reasoning.filtering.logic import calculate_impact_scores
+    with Session(engine) as session:
+        calculate_impact_scores(job_id, hypotheses, session)
+        
+    logger.info(f"Persisted {inserted} hypotheses for job {job_id} and updated impact scores.")
     return inserted
 
 

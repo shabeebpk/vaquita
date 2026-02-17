@@ -28,6 +28,9 @@ class Decision(Enum):
     
     # Need more data
     FETCH_MORE_LITERATURE = "fetch_more_literature"
+    
+    # Strategic download: targeted extraction of promising leads
+    STRATEGIC_DOWNLOAD_TARGETED = "strategic_download_targeted"
 
 def decision_from_string(decision_str: str) -> Decision:
     """Convert a string to a Decision enum value.

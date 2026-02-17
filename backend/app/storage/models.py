@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Text, String, Boolean, DateTime, ForeignKey, JSON, Enum
+from sqlalchemy import Column, Integer, Text, String, Boolean, DateTime, ForeignKey, JSON, Enum, Float
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 from .db import Base
@@ -455,9 +455,30 @@ class SearchQueryRun(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
     provider_used = Column(String, nullable=False)  # e.g., 'arxiv', 'crossref', 'pubmed'
     reason = Column(String, nullable=False)  # 'initial_attempt', 'reuse', 'expansion'
-    fetched_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs fetched (raw results)
-    accepted_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs accepted
-    rejected_paper_ids = Column(JSONB, nullable=False)  # List of paper IDs rejected
     signal_delta = Column(Integer, nullable=True)  # Computed during signal evaluation: >0, 0, or <0
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+class JobPaperEvidence(Base):
+    """
+    Strategic Ledger: Records the outcome of each paper's processing for a given job.
+    
+    Responsibility: Provide a single source of truth for which papers were considered
+    for a job, their status (fetched, accepted, rejected), and the reason for that status.
+    This table is append-only and immutable for auditability.
+    
+    evaluated: True means downloaded and extracted.
+    """
+    __tablename__ = "job_paper_evidence"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    run_id = Column(Integer, ForeignKey("search_query_runs.id"), nullable=False, index=True)
+    paper_id = Column(Integer, ForeignKey("papers.id"), nullable=False, index=True)
+    evaluated = Column(Boolean, default=False, nullable=False) # True = Downloaded & Extracted
+    impact_score = Column(Float, default=0.0, nullable=False)
+    hypo_ref_count = Column(Integer, default=0, nullable=False)
+    cumulative_conf = Column(Float, default=0.0, nullable=False)
+    entity_density = Column(Integer, default=0, nullable=False)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

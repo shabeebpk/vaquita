@@ -62,8 +62,11 @@ class LLMService:
     def _create_provider_instance(self, provider_id: str, provider_cls: type) -> Optional[BaseLLMProvider]:
         """Factory for provider instances mapping system credentials to the class."""
         # Policy-driven default parameters
+        # Priority: Settings.LLM_MODEL > AdminPolicy.defaults.model
+        model = self.settings.LLM_MODEL or self.policy.defaults.model
+        
         common_kwargs = {
-            "model": self.policy.defaults.model,
+            "model": model,
             "temperature": self.policy.defaults.temperature,
             "max_tokens": self.policy.defaults.max_tokens
         }
