@@ -266,6 +266,8 @@ def run_path_reasoning(
     max_hops: int = 2,
     allow_len3: bool = False,
     stoplist: Optional[Set[str]] = None,
+    preferred_predicates: Optional[List[str]] = None,
+    preferred_predicate_boost_factor: float = 1.2,
 ) -> List[Dict]:
     """Main entrypoint for Phase-4 reasoning.
 
@@ -276,14 +278,18 @@ def run_path_reasoning(
         max_hops: base hop count (2 recommended)
         allow_len3: allow enumerating length-3 paths when True
         stoplist: additional stoplisted intermediate texts (lowercased)
+        preferred_predicates: optional list of canonical predicate labels to boost in scoring
+        preferred_predicate_boost_factor: multiplier for confidence when preferred predicates found
 
     Returns:
-        List of hypothesis dicts.
+        List of hypothesis dicts (sorted by confidence desc).
     """
     if reasoning_mode not in {"explore", "query"}:
         raise ValueError("reasoning_mode must be 'explore' or 'query'")
 
     stoplist = set(s.lower() for s in (stoplist or DEFAULT_STOPLIST))
+    preferred_predicates = set(p.lower() for p in (preferred_predicates or []))
+    preferred_predicate_boost_factor = max(1.0, min(2.0, float(preferred_predicate_boost_factor)))
 
     # Convert to graph once
     G = _graph_to_nx(semantic_graph)
@@ -318,6 +324,18 @@ def run_path_reasoning(
             continue
         seen_hypotheses.add(key)
         hypotheses.append(hyp)
+
+    # Apply preferred_predicates boost (increase confidence if contains preferred predicates)
+    if preferred_predicates:
+        for hyp in hypotheses:
+            path_preds = set(p.lower() for p in hyp.get("predicates", []))
+            if path_preds & preferred_predicates:
+                # Boost confidence by multiplier (capped at 100)
+                hyp["confidence"] = min(int(hyp["confidence"] * preferred_predicate_boost_factor), 100)
+                logger.debug(
+                    f"Boosted hypothesis {hyp['source']} -> {hyp['target']} "
+                    f"confidence by {preferred_predicate_boost_factor}x (preferred predicates found)"
+                )
 
     # Sort hypotheses by confidence desc, deterministic tie-break by source->target
     hypotheses.sort(key=lambda h: (-h["confidence"], h["source"], h["target"]))

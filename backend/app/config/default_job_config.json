@@ -1,16 +1,16 @@
 {
-    "domain": "biomedical",
-    "focus_areas": [],
+    "domain": "",
     "query_config": {
-        "query_expansion_terms": 3
+        "focus_areas": []
     },
     "path_reasoning_config": {
         "seeds": [],
         "stoplist": []
     },
-    "expert_settings": {
-        "assumptions": [],
-        "preferred_predicates": [],
+    "hypothesis_config": {
+        "preferred_predicates": []
+    },
+    "graph_config": {
         "excluded_entities": []
     }
 }

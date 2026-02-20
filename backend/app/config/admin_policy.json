@@ -61,7 +61,8 @@
         },
         "path_reasoning_defaults": {
             "max_hops": 4,
-            "allow_len3": true
+            "allow_len3": true,
+            "preferred_predicate_boost_factor": 1.2
         },
         "domain_resolution": {
             "allowed_domains": [

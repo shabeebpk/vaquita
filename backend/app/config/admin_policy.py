@@ -103,6 +103,8 @@ class PathReasoningDefaults(BaseModel):
     """Path reasoning and hypothesis generation parameters."""
     max_hops: int = 4
     allow_len3: bool = True
+    preferred_predicate_boost_factor: float = 1.2
+    """Multiplier for confidence when preferred predicates found (min 1.0, max 2.0)."""
 
 
 class DomainResolution(BaseModel):

@@ -175,7 +175,7 @@ def project_object(text: str) -> str:
     return clean.lower()
 
 
-def project_structural_graph(job_id: int) -> Dict:
+def project_structural_graph(job_id: int, excluded_entities: set = None) -> Dict:
     """Build structural projected graph from raw triples for `job_id`.
 
     This reads raw `Triple` rows (no aggregation) and returns a dict:
@@ -187,7 +187,14 @@ def project_structural_graph(job_id: int) -> Dict:
       }
 
     Each edge: {subject, predicate, object, support, triple_ids, block_ids, source_ids}
+    
+    Args:
+        job_id: Job ID
+        excluded_entities: Optional set of canonical entity names to filter out
     """
+    excluded_entities = excluded_entities or set()
+    excluded_entities = {e.lower() for e in excluded_entities}  # Normalize to lowercase
+    
     projected: Dict[Tuple[str, str, str], Dict] = {}
     total = 0
 
@@ -202,6 +209,11 @@ def project_structural_graph(job_id: int) -> Dict:
                 ps = project_subject(t.subject or "")
                 pp = project_predicate(t.predicate or "")
                 po = project_object(t.object or "")
+
+                # Filter out triples containing excluded entities
+                if ps.lower() in excluded_entities or po.lower() in excluded_entities:
+                    logger.debug(f"Excluding triple: {ps} -- {pp} -- {po} (excluded_entities)")
+                    continue
 
                 key = (ps, pp, po)
                 if key not in projected:

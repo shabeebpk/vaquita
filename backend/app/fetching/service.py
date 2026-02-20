@@ -93,6 +93,15 @@ class FetchService:
         batch_size = int(admin_policy.query_orchestrator.fetch_batch_size)
         query_config = QueryOrchestratorConfig()
         
+        # Load job config for focus_areas
+        job = session.query(Job).get(job_id)
+        job_config = None
+        if job and job.job_config:
+            from app.config.job_config import JobConfig
+            job_config = JobConfig(**job.job_config) if isinstance(job.job_config, dict) else job.job_config
+        
+        focus_areas = job_config.query_config.focus_areas if job_config else []
+        
         # 2. Select top K passed hypotheses
         # Use refined diversity algorithm (Grouped by Source-Target, Tiered Priority)
         targets = select_top_diverse_leads(session, job_id, top_k, hypotheses)
@@ -106,8 +115,12 @@ class FetchService:
 
         for hypo in targets:
             try:
-                # 3. Get/Create SearchQuery
-                search_query = get_or_create_search_query(hypo, job_id, session, config=query_config)
+                # 3. Get/Create SearchQuery with focus_areas
+                search_query = get_or_create_search_query(
+                    hypo, job_id, session, 
+                    focus_areas=focus_areas, 
+                    config=query_config
+                )
                 should_run, reason = should_run_query(search_query, session, config=query_config)
                 
                 if not should_run:

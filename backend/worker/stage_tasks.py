@@ -282,9 +282,17 @@ def structural_graph_stage(self, job_id: int):
         job = session.query(Job).get(job_id)
         if not job or job.status != "TRIPLES_EXTRACTED":
             return
+        
+        # Load job config for excluded_entities
+        job_config = None
+        if job.job_config:
+            from app.config.job_config import JobConfig
+            job_config = JobConfig(**job.job_config) if isinstance(job.job_config, dict) else job.job_config
+        
+        excluded_entities = set(job_config.graph_config.excluded_entities) if job_config else set()
 
     try:
-        proj = project_structural_graph(job_id)
+        proj = project_structural_graph(job_id, excluded_entities=excluded_entities)
         set_structural_graph(job_id, proj)
         
         with Session(engine) as session:
@@ -447,7 +455,9 @@ def path_reasoning_stage(self, job_id: int):
         # Reasoning params: System invariants from AdminPolicy, user tuning from JobConfig
         seeds = job_config.path_reasoning_config.seeds
         stoplist = set(job_config.path_reasoning_config.stoplist)
+        preferred_predicates = job_config.hypothesis_config.preferred_predicates
         allow_len3 = admin_policy.algorithm.path_reasoning_defaults.allow_len3
+        boost_factor = admin_policy.algorithm.path_reasoning_defaults.preferred_predicate_boost_factor
 
         # Expand seeds to include affected nodes so reasoning focuses on changed area
         effective_seeds = list(set(seeds or []) | set(affected_nodes))
@@ -459,6 +469,8 @@ def path_reasoning_stage(self, job_id: int):
             max_hops=_PATH_REASONING_MAX_HOPS,
             allow_len3=allow_len3,
             stoplist=stoplist,
+            preferred_predicates=preferred_predicates,
+            preferred_predicate_boost_factor=boost_factor,
         )
 
         hypotheses = filter_hypotheses(hypotheses, persisted_graph)

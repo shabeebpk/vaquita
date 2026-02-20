@@ -84,6 +84,7 @@ def get_or_create_search_query(
     job_id: int,
     session: Session,
     query_text: str = "",
+    focus_areas: list = None,
     config: Optional[QueryOrchestratorConfig] = None
 ) -> SearchQuery:
     """
@@ -94,6 +95,7 @@ def get_or_create_search_query(
         job_id: Job ID
         session: SQLAlchemy session
         query_text: Optional custom query text (derived from hypothesis if empty)
+        focus_areas: Optional list of keywords to inject into query (AND/OR logic)
         config: QueryOrchestratorConfig (created if None)
     
     Returns:
@@ -101,6 +103,8 @@ def get_or_create_search_query(
     """
     if config is None:
         config = QueryOrchestratorConfig()
+    
+    focus_areas = focus_areas or []
     
     hypothesis_signature = compute_hypothesis_signature(hypothesis, config=config)
     
@@ -118,6 +122,13 @@ def get_or_create_search_query(
     if not query_text:
         source = hypothesis.get("source", "")
         target = hypothesis.get("target", "")
+        query_text = f"relationship between {source} and {target}"
+    
+    # Inject focus areas: AND/OR query expansion
+    if focus_areas:
+        focus_str = " OR ".join(focus_areas)
+        query_text = f"({query_text}) AND ({focus_str})"
+        logger.debug(f"Enhanced query with focus_areas: {query_text}")
         query_text = f"relationship between {source} and {target}"
     
     # Inherit domain from hypothesis (Domain Resolution Contract)
