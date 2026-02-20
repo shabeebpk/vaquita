@@ -1,12 +1,10 @@
 """
-Persistence layer for Phase-3 semantic graphs.
+Persistence layer for Phase-3 semantic graphs with versioning support.
 
-Handles reading and writing SemanticGraph records to the database
-with proper validation and artifact isolation.
-
-Design: Single-active-state per job - only one SemanticGraph exists per job_id at any time.
-On each rebuild, the old graph is deleted before a new one is inserted.
-This ensures no versioning is needed and storage overhead is minimal.
+Handles reading and writing SemanticGraph records with versioning:
+- Only one is_active=TRUE per job (single-active-state)
+- All versions kept for audit trail
+- Old versions marked is_active=FALSE
 """
 import logging
 from datetime import datetime
@@ -20,23 +18,20 @@ logger = logging.getLogger(__name__)
 
 def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
     """
-    Persist the Phase-3 semantic graph output to the database.
+    Persist Phase-3 semantic graph with versioning.
     
-    Implements single-active-state model: deletes any existing SemanticGraph
-    for the job before inserting the new one. This ensures only one semantic
-    graph exists per job at any given time.
+    Deactivates old graph, inserts new as is_active=TRUE.
     
     Args:
-        job_id: The job ID this graph belongs to.
-        semantic_graph: The complete Phase-3 output dict with nodes, edges, summary.
+        job_id: The job ID.
+        semantic_graph: Complete Phase-3 output dict.
     
     Returns:
-        SemanticGraph ORM model instance.
+        SemanticGraph ORM instance.
     
     Raises:
-        ValueError: If semantic_graph is missing required keys.
+        ValueError: If semantic_graph invalid.
     """
-    # Validate structure
     if not isinstance(semantic_graph, dict):
         raise ValueError(f"semantic_graph must be dict, got {type(semantic_graph)}")
     
@@ -48,29 +43,32 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
     
     with Session(engine) as session:
         try:
-            # SINGLE-ACTIVE-STATE: Delete existing graph for this job before inserting new
             existing = session.query(SemanticGraph).filter(
-                SemanticGraph.job_id == job_id
+                SemanticGraph.job_id == job_id,
+                SemanticGraph.is_active == True
             ).first()
             
+            next_version = 1
             if existing:
-                session.delete(existing)
-                session.flush()  # Flush deletes before inserting
-                logger.info(f"Deleted existing semantic graph for job {job_id} (replacing)")
+                existing.is_active = False
+                session.flush()
+                next_version = existing.version + 1
+                logger.info(f"Deactivated semantic graph v{existing.version} for job {job_id}")
             
-            # Create and persist new graph
             record = SemanticGraph(
                 job_id=job_id,
-                graph=semantic_graph,  # stored as JSONB unchanged
+                graph=semantic_graph,
                 node_count=node_count,
                 edge_count=edge_count,
+                version=next_version,
+                is_active=True,
                 created_at=datetime.utcnow(),
             )
             session.add(record)
             session.commit()
             
             logger.info(
-                f"Persisted semantic graph for job {job_id}: "
+                f"Persisted semantic graph v{next_version} for job {job_id}: "
                 f"node_count={node_count}, edge_count={edge_count}"
             )
             return record
@@ -81,49 +79,82 @@ def persist_semantic_graph(job_id: int, semantic_graph: dict) -> SemanticGraph:
             raise ValueError(msg) from e
 
 
-def get_semantic_graph(job_id: int) -> dict | None:
+def get_semantic_graph(job_id: int, version: int = None) -> dict | None:
     """
-    Retrieve a persisted semantic graph by job_id.
+    Retrieve semantic graph for a job.
+    
+    By default, retrieves active version. If version specified, retrieves that version.
     
     Args:
         job_id: The job ID.
+        version: Optional specific version (for audit/rollback).
     
     Returns:
-        The semantic_graph dict (nodes, edges, summary), or None if not found.
+        The semantic_graph dict, or None if not found.
     """
     with Session(engine) as session:
-        record = session.query(SemanticGraph).filter(
-            SemanticGraph.job_id == job_id
-        ).first()
+        query = session.query(SemanticGraph).filter(SemanticGraph.job_id == job_id)
+        
+        if version is None:
+            query = query.filter(SemanticGraph.is_active == True)
+        else:
+            query = query.filter(SemanticGraph.version == version)
+        
+        record = query.first()
         
         if record:
-            logger.debug(f"Retrieved semantic graph for job {job_id}")
+            logger.debug(f"Retrieved semantic graph v{record.version} for job {job_id}")
             return record.graph
         
         logger.debug(f"No semantic graph found for job {job_id}")
         return None
 
 
+def get_active_semantic_version(job_id: int) -> int | None:
+    """Return active semantic graph version number for job, or None if not found."""
+    with Session(engine) as session:
+        record = session.query(SemanticGraph.version).filter(
+            SemanticGraph.job_id == job_id,
+            SemanticGraph.is_active == True
+        ).first()
+        if record:
+            return int(record[0])
+        return None
+
+
+def get_semantic_graph_record(job_id: int, version: int | None = None):
+    """Return the ORM record for semantic graph (active by default)."""
+    with Session(engine) as session:
+        query = session.query(SemanticGraph).filter(SemanticGraph.job_id == job_id)
+        if version is None:
+            query = query.filter(SemanticGraph.is_active == True)
+        else:
+            query = query.filter(SemanticGraph.version == version)
+        return query.first()
+
+
 def delete_semantic_graph(job_id: int) -> bool:
     """
-    Delete a persisted semantic graph by job_id (cleanup/rebuild scenarios).
+    Deactivate all semantic graphs (soft delete for versioning).
     
     Args:
         job_id: The job ID.
     
     Returns:
-        True if a record was deleted, False if not found.
+        True if deactivated, False if not found.
     """
     with Session(engine) as session:
-        record = session.query(SemanticGraph).filter(
-            SemanticGraph.job_id == job_id
-        ).first()
+        records = session.query(SemanticGraph).filter(
+            SemanticGraph.job_id == job_id,
+            SemanticGraph.is_active == True
+        ).all()
         
-        if record:
-            session.delete(record)
+        if records:
+            for record in records:
+                record.is_active = False
             session.commit()
-            logger.info(f"Deleted semantic graph for job {job_id}")
+            logger.info(f"Deactivated semantic graph(s) for job {job_id}")
             return True
         
-        logger.debug(f"No semantic graph found to delete for job {job_id}")
+        logger.debug(f"No active semantic graph found for job {job_id}")
         return False

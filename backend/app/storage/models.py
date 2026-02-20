@@ -258,18 +258,20 @@ class Triple(Base):
 
 class SemanticGraph(Base):
     """
-    Final Phase-3 semantic graph output as JSONB.
+    Final Phase-3 semantic graph output as JSONB with versioning support.
     
     Responsibility: Store the complete, normalized knowledge graph produced
     after triple aggregation, deduplication, and relationship inference.
     This is a read-only artifact (pipeline output); graph reconstruction
     is handled by services, not here.
-    
+
     Stores summary metadata (node_count, edge_count) for quick filtering
     and downstream decision-making without full deserialization.
     
+    Versioning: Multiple versions can exist per job, but only one is_active=TRUE.
+    Older versions kept for audit trail (can be used for rollback if needed).
+    
     Future extensibility:
-    - Add graph_version for tracking iterative updates as new sources are added
     - Add quality_metrics JSONB (clustering_coeff, density, centrality scores)
     - Add compressed_graph for efficient storage of large graphs
     - Add diff_from_previous for incremental update tracking
@@ -277,10 +279,14 @@ class SemanticGraph(Base):
     __tablename__ = "semantic_graphs"
 
     id = Column(Integer, primary_key=True)
-    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, unique=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
     graph = Column(JSONB, nullable=False)  # {nodes: [...], edges: [...], summary: {...}}
     node_count = Column(Integer, nullable=False)
     edge_count = Column(Integer, nullable=False)
+    
+    # Versioning support
+    version = Column(Integer, nullable=False, default=1)  # Increment on each rebuild
+    is_active = Column(Boolean, nullable=False, default=True)  # Only 1 TRUE per job
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, nullable=True)
@@ -288,12 +294,16 @@ class SemanticGraph(Base):
 
 class Hypothesis(Base):
     """
-    Candidate relationship or claim derived from semantic graph.
+    Candidate relationship or claim derived from semantic graph with versioning support.
     
     Responsibility: Represent a potential answer to a query or an interesting
     structural pattern discovered in the graph. Each hypothesis is tagged with
     confidence, mode (explore vs. query-driven), and filtering results.
     Optionally linked to a ReasoningQuery for query-mode hypotheses.
+
+    Versioning: Multiple versions can exist per job, but only one is_active=TRUE set.
+    Older versions kept for audit trail. affected_by_nodes tracks which new nodes
+    triggered deactivation (for incremental rebuild tracking).
     
     Future extensibility:
     - Add support_count (number of paths or sources supporting this hypothesis)
@@ -322,6 +332,11 @@ class Hypothesis(Base):
     source_ids = Column(JSONB, nullable=False)  # Union of all paper IDs involved in the path
     triple_ids = Column(JSONB, nullable=False)  # Union of all triple IDs involved in the path
     block_ids = Column(JSONB, nullable=False)   # Union of all block IDs involved in the path
+    
+    # Versioning support
+    version = Column(Integer, nullable=False, default=1)  # Increment on each rebuild
+    is_active = Column(Boolean, nullable=False, default=True)  # Only 1 set per job is TRUE
+    affected_by_nodes = Column(JSONB, nullable=True)  # Which new nodes caused deactivation (for audit)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

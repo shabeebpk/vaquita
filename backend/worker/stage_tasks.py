@@ -359,6 +359,7 @@ def sanitization_stage(self, job_id: int):
 def semantic_merging_stage(self, job_id: int):
     """Merges nodes based on semantic similarity."""
     from app.graphs.semantic import merge_semantically
+    from app.graphs.incremental import incremental_merge_semantically
     from app.graphs.cache import get_structural_graph, delete_structural_graph
     from app.graphs.persistence import persist_semantic_graph
     
@@ -374,7 +375,9 @@ def semantic_merging_stage(self, job_id: int):
         if not cached:
             raise ValueError("Sanitized graph not found in cache")
             
-        semantic_graph = merge_semantically(
+        # Prefer incremental merge when possible to avoid full re-embedding
+        semantic_graph = incremental_merge_semantically(
+            job_id,
             cached,
             embedding_provider_name="sentence-transformers",
             similarity_threshold=_SEMANTIC_SIMILARITY_THRESHOLD,
@@ -409,7 +412,7 @@ def semantic_merging_stage(self, job_id: int):
 )
 def path_reasoning_stage(self, job_id: int):
     """Finds and filters logical paths (hypotheses)."""
-    from app.graphs.persistence import get_semantic_graph
+    from app.graphs.persistence import get_semantic_graph, get_active_semantic_version
     from app.path_reasoning import run_path_reasoning
     from app.path_reasoning.persistence import persist_hypotheses, delete_all_hypotheses_for_job
     from app.path_reasoning.filtering import filter_hypotheses
@@ -426,6 +429,18 @@ def path_reasoning_stage(self, job_id: int):
         if not persisted_graph:
             raise ValueError("Semantic graph not found for reasoning")
             
+        # Compute affected nodes (new canonical nodes) by comparing versions
+        affected_nodes = set()
+        try:
+            active_ver = get_active_semantic_version(job_id)
+            if active_ver and active_ver > 1:
+                prev_graph = get_semantic_graph(job_id, version=active_ver - 1)
+                prev_texts = set(n.get("text") for n in (prev_graph.get("nodes", []) if prev_graph else [] ) if isinstance(n, dict))
+                curr_texts = set(n.get("text") for n in persisted_graph.get("nodes", []) if isinstance(n, dict))
+                affected_nodes = curr_texts - prev_texts
+        except Exception:
+            affected_nodes = set()
+
         # Load and validate Job Configuration
         job_config = JobConfig(**(job.job_config or {}))
             
@@ -434,19 +449,22 @@ def path_reasoning_stage(self, job_id: int):
         stoplist = set(job_config.path_reasoning_config.stoplist)
         allow_len3 = admin_policy.algorithm.path_reasoning_defaults.allow_len3
 
+        # Expand seeds to include affected nodes so reasoning focuses on changed area
+        effective_seeds = list(set(seeds or []) | set(affected_nodes))
+
         hypotheses = run_path_reasoning(
             persisted_graph,
             reasoning_mode="explore",
-            seeds=seeds,
+            seeds=effective_seeds,
             max_hops=_PATH_REASONING_MAX_HOPS,
             allow_len3=allow_len3,
             stoplist=stoplist,
         )
 
         hypotheses = filter_hypotheses(hypotheses, persisted_graph)
-        
-        delete_all_hypotheses_for_job(job_id)
-        persist_hypotheses(job_id, hypotheses)
+
+        # Persist incrementally: only deactivate hypotheses touching affected nodes
+        persist_hypotheses(job_id, hypotheses, affected_nodes=affected_nodes if affected_nodes else None)
         
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
