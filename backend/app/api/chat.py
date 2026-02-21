@@ -5,7 +5,7 @@ import uuid
 import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import Optional, List, Union, Any
 
 from app.storage.db import engine
 from app.storage.models import Job, File as FileModel, FileOriginType
@@ -19,16 +19,26 @@ router = APIRouter()
 
 @router.post("/")
 async def unified_chat(
-    job_id: Optional[int] = Form(None),
+    job_id: Optional[Union[int, str]] = Form(None),
     content: Optional[str] = Form(None),
-    files: Optional[List[UploadFile]] = File(None)
+    files: Optional[Any] = File(None)
 ):
     """
     Unified Endpoint for Literature Review.
     Handles both text input and multiple file uploads.
     """
     with Session(engine) as session:
-        # 1. Lazy Job Creation
+        # 1. Sanitize job_id (FastAPI/Swagger often sends empty strings or "string" placeholders)
+        if isinstance(job_id, str):
+            if not job_id.strip() or job_id == "string":
+                job_id = None
+            else:
+                try:
+                    job_id = int(job_id)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid job_id: {job_id}")
+
+        # 2. Lazy Job Creation
         if job_id is None:
             # Load default job config via centralized loader
             try:
@@ -47,6 +57,16 @@ async def unified_chat(
             job = session.query(Job).get(job_id)
             if not job:
                 raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        # 3. Sanitize files (Filter out placeholders like "string")
+        actual_files = []
+        if files:
+            # Ensure it's a list for iteration
+            file_list = files if isinstance(files, list) else [files]
+            for f in file_list:
+                if isinstance(f, UploadFile) and f.filename and f.filename != "string":
+                    actual_files.append(f)
+        files = actual_files
 
         responses = []
 

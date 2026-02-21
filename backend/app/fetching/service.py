@@ -84,7 +84,11 @@ class FetchService:
 
     def execute_fetch_stage(self, job_id: int, hypotheses: List[Dict[str, Any]], session: Session):
         """
-        Main entry point for the Fetch Stage (Refactored Pipeline).
+        Main entry point for the Fetch Stage (Universal Lead Orchestration).
+        
+        Now supports both:
+        1. Hypotheses (Machine Discovered)
+        2. Vanguard Seeds (User Intent via SearchQuery status='new')
         """
         logger.info(f"FetchService: Starting fetch stage for Job {job_id}")
         
@@ -93,48 +97,72 @@ class FetchService:
         batch_size = int(admin_policy.query_orchestrator.fetch_batch_size)
         query_config = QueryOrchestratorConfig()
         
-        # Load job config for focus_areas
-        job = session.query(Job).get(job_id)
-        job_config = None
-        if job and job.job_config:
-            from app.config.job_config import JobConfig
-            job_config = JobConfig(**job.job_config) if isinstance(job.job_config, dict) else job.job_config
+        # 2. Harmonize Lead Selection (Hypotheses + Vanguard Seeds)
+        # 2a. Machine Leads
+        from app.fetching.selection import select_top_diverse_leads
+        machine_leads = select_top_diverse_leads(session, job_id, top_k, hypotheses)
         
-        focus_areas = job_config.query_config.focus_areas if job_config else []
+        # 2b. Human Leads (Vanguard Queries with status='new')
+        from app.storage.models import SearchQuery, Job
+        vanguard_leads = session.query(SearchQuery).filter(
+            SearchQuery.job_id == job_id,
+            SearchQuery.status == "new"
+        ).all()
         
-        # 2. Select top K passed hypotheses
-        # Use refined diversity algorithm (Grouped by Source-Target, Tiered Priority)
-        targets = select_top_diverse_leads(session, job_id, top_k, hypotheses)
-        
-        if not targets:
-            logger.warning("FetchService: No hypotheses (Passed or Promising) to fetch for")
+        if vanguard_leads:
+            logger.info(f"FetchService: Found {len(vanguard_leads)} vanguard seeds to ignite job {job_id}")
+
+        if not machine_leads and not vanguard_leads:
+            logger.warning("FetchService: No leads (Machine or Human) to fetch for")
             return
 
-        # Load IDs for job-level dedup
+        # 3. Load IDs for job-level dedup
+        from app.fetching.service import get_all_fetched_ids_for_job
         seen_ids = set(get_all_fetched_ids_for_job(job_id, session))
+        
+        # 4. Harmonized Execution Loop
+        all_targets = []
+        
+        # Handle Vanguard Seeds first (High Priority)
+        for v_query in vanguard_leads:
+            all_targets.append(("seed", v_query))
+            
+        # Handle Machine Leads
+        for m_hypo in machine_leads:
+            # For machine leads, we still need to get/create the query object
+            # Note: We use the job's general focus_areas from config for these
+            job_obj = session.query(Job).get(job_id)
+            focus_areas = []
+            if job_obj and job_obj.job_config:
+                from app.config.job_config import JobConfig
+                cfg = JobConfig(**job_obj.job_config) if isinstance(job_obj.job_config, dict) else job_obj.job_config
+                focus_areas = cfg.query_config.focus_areas
+            
+            from app.fetching.query_orchestrator import get_or_create_search_query
+            s_query = get_or_create_search_query(
+                m_hypo, job_id, session,
+                focus_areas=focus_areas,
+                config=query_config
+            )
+            all_targets.append(("machine", s_query))
 
-        for hypo in targets:
+        for lead_type, search_query in all_targets:
             try:
-                # 3. Get/Create SearchQuery with focus_areas
-                search_query = get_or_create_search_query(
-                    hypo, job_id, session, 
-                    focus_areas=focus_areas, 
-                    config=query_config
-                )
+                from app.fetching.query_orchestrator import should_run_query
                 should_run, reason = should_run_query(search_query, session, config=query_config)
                 
                 if not should_run:
                     logger.info(f"FetchService: Skipping query {search_query.id}: {reason}")
                     continue
 
-                # 4. Fetch via domain-aware providers
+                # 5. Fetch via domain-aware providers
                 candidates, provider_name = self.fetch_for_hypothesis(search_query, batch_size)
                 
                 if not candidates:
                     logger.info(f"FetchService: No papers found for query {search_query.id}")
                     continue
 
-                # 5. Global Deduplication and Persistence
+                # 6. Global Deduplication and Persistence
                 all_found_papers = self._deduplicate_and_persist(candidates, session)
                 
                 # 6. Job-level Deduplication

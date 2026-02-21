@@ -67,37 +67,22 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
         session.add(msg)
         session.flush()
         
-        # 2. Classify
+        # 2. Classify and Handle
         classifier = get_classifier()
-        classification = classifier.classify(text)
+        classification = classifier.classify(text, job_id=job_id, session=session)
         
         logger.info(f"Job {job_id} message {msg.id} classified as {classification.label.value}")
         
-        # 3. Route
-        if classification.is_content_available():
-            content_text = text if classification.label == ClassificationLabel.CONTENT else classification.content_portion
-            
-            source = IngestionSource(
-                job_id=job_id,
-                source_type=IngestionSourceType.USER_TEXT.value,
-                source_ref=f"message:{msg.id}",
-                raw_text=content_text or text,
-                processed=False
-            )
-            session.add(source)
-            
-            # Set status to READY_TO_INGEST so the pipeline can proceed
-            job = session.query(Job).get(job_id)
-            if job:
-                job.status = "READY_TO_INGEST"
-            
-            session.commit()
-            publish_event({"job_id": job_id, "stage": "classification", "status": "content_detected", "message_id": msg.id})
-            
-        else:
-            # intent/greeting logic
-            session.commit()
-            publish_event({"job_id": job_id, "stage": "classification", "status": "non_content_input", "message_id": msg.id})
+        # 3. Finalize
+        session.commit()
+        
+        publish_event({
+            "job_id": job_id, 
+            "stage": "classification", 
+            "status": "completed", 
+            "label": classification.label.value,
+            "message_id": msg.id
+        })
 
     return {"message_id": msg.id, "classification": classification.label.value}
 

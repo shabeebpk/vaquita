@@ -6,29 +6,31 @@ Your task is to classify user input into exactly ONE of following categories and
 ## Classification Labels & Intent Definitions
 
 1. RESEARCH_SEED
-- Meaning: A minimal statement defining a relationship or topic to study.
-- When: User says "I want to study X and Y" or "Check the link between Caffeine and Heart Rate".
-- Note: No evidence provided, just the starting point of research.
+- Meaning: A statement or QUESTION defining a relationship (A -> B) or topic to investigate via literature search.
+- When: User says "Does A inhibit B?", "Check the link between X and Y", or asks about causal effects.
+- Note: This triggers a search. Expect Source, Target, and optional Focus entities.
 
 2. EVIDENCE_INPUT
-- Meaning: Factual data meant to be added to the knowledge graph.
-- When: User provides observations, notes, abstracts, or pasted text intended for extraction.
+- Meaning: Factual data meant for direct ingestion into the knowledge graph (abstracts, notes, findings).
+- When: User provides observations or pasted text intended for extraction.
 
-3. CLARIFICATION_CONSTRAINT
-- Meaning: Scoping or filtering instructions.
-- When: User narrows the study (e.g., "Only look at humans", "Ignore 2020 papers", "Prioritize Gene A").
+3. CONVERSATIONAL
+- Meaning: General chat, greetings, meta-questions, or ambiguous input.
+- When: User says "Hi", "Thanks", or asks questions about the system ITSELF.
 
-4. EXPERT_GUIDANCE
-- Meaning: Domain heuristics or assumptions.
-- When: User provides "hints" on how experts think (e.g., "Assume Protein A inhibits B in high concentrations").
+## Few-Shot Examples
 
-5. GRAPH_QUERY
-- Meaning: A read-only request to see what the graph currently knows.
-- When: User asks "What paths exist between X and Z?" or "Summarize what you found so far".
+Input: "Does Caffeine help headaches?"
+Output: { "label": "RESEARCH_SEED", "payload": { "topic": "Caffeine and headaches", "entities": ["Caffeine", "Headaches"], "domain": "biomedical", "raw_text": "Does Caffeine help headaches?" } }
 
-6. CONVERSATIONAL
-- Meaning: General chat, greetings, meta-questions about the system, or confusion.
-- When: User says "Hi", "Thanks", "How do you work?", or provides ambiguous input.
+Input: "How are you today?"
+Output: { "label": "CONVERSATIONAL", "payload": { "answer": "I'm doing well, ready to help with your research. What topic are we exploring?" } }
+
+Input: "Check if sugar causes inflammation"
+Output: { "label": "RESEARCH_SEED", "payload": { "topic": "Sugar and inflammation", "entities": ["Sugar", "Inflammation"], "domain": "biomedical", "raw_text": "Check if sugar causes inflammation" } }
+
+Input: "What is this tool used for?"
+Output: { "label": "CONVERSATIONAL", "payload": { "answer": "This is an iterative literature review tool that builds a knowledge graph from research papers." } }
 
 ## Output Format (STRICT JSON ONLY)
 
@@ -37,58 +39,37 @@ You must return ONLY a JSON object. No prose. No markdown blocks.
 ### JSON Schema
 
 {
-  "label": "RESEARCH_SEED" | "EVIDENCE_INPUT" | "CLARIFICATION_CONSTRAINT" | "EXPERT_GUIDANCE" | "GRAPH_QUERY" | "CONVERSATIONAL",
+  "label": "RESEARCH_SEED" | "EVIDENCE_INPUT" | "CONVERSATIONAL",
   "payload": {
-    /* Label specific keys - see below */
+    /* Label specific keys */
   }
 }
 
-### Payload Schemas (Always include all keys, even if null/empty)
+### Payload Schemas (Always include all keys, even if null)
 
 #### RESEARCH_SEED
 {
   "topic": string | null,
   "entities": [string],
+  "domain": {allowed_domains},
   "raw_text": string
 }
 
 #### EVIDENCE_INPUT
 {
-  "raw_text": string
-}
-
-#### CLARIFICATION_CONSTRAINT
-{
-  "constraints": {
-    "include": [string],
-    "exclude": [string],
-    "focus": [string]
-  }
-}
-
-#### EXPERT_GUIDANCE
-{
-  "heuristics": [string],
-  "assumptions": [string]
-}
-
-#### GRAPH_QUERY
-{
-  "query_type": "path" | "summary" | "entity" | "other",
-  "entities": [string],
-  "raw_text": string
+  "raw_text": null
 }
 
 #### CONVERSATIONAL
 {
-  "raw_text": string
+  "answer": string
 }
 
 ## Critical Rules
 
-1. NO BLIND GUESSING: If intent is ambiguous or multi-faceted with no clear dominant intent, use CONVERSATIONAL.
-2. SUBMISSION: Do NOT interpret or execute the request. Your ONLY job is to classify and extract.
-3. DATA INTEGRITY: Use the original user terminology for extracted entities.
+1. RESEARCH QUESTIONS ARE SEEDS: Any question about a scientific relationship is a RESEARCH_SEED.
+2. NO BLIND GUESSING: If truly meta-chat, use CONVERSATIONAL.
+3. DOMAIN: For RESEARCH_SEED, use: {allowed_domains}
 
 User Input:
 {text}

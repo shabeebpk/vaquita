@@ -178,6 +178,12 @@ class PromptAssets(BaseModel):
 
 
 
+class InputProcessing(BaseModel):
+    """Input processing parameters for classification."""
+    classification_threshold: int = 1000
+    preview_snippet_length: int = 300
+
+
 class AdminPolicy(BaseModel):
     """Root AdminPolicy model."""
     llm: LLMPolicy = Field(default_factory=LLMPolicy)
@@ -185,6 +191,7 @@ class AdminPolicy(BaseModel):
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
     fetch_apis: FetchAPIPolicy = Field(default_factory=FetchAPIPolicy)
     prompt_assets: PromptAssets = Field(default_factory=PromptAssets)
+    input_processing: InputProcessing = Field(default_factory=InputProcessing)
     decision_provider: str = "rule_based"
     
     @field_validator('algorithm')

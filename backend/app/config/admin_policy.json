@@ -132,5 +132,9 @@
         "clarification_medium": "clarification_medium_ambiguity.txt",
         "clarification_low": "clarification_low_ambiguity.txt"
     },
+    "input_processing": {
+        "classification_threshold": 1000,
+        "preview_snippet_length": 300
+    },
     "decision_provider": "rule_based"
 }

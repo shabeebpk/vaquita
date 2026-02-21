@@ -34,7 +34,14 @@ class EvidenceInputHandler(ClassifierHandler):
             processed=False
         )
         session.add(source)
-        session.flush() # Get ID
+        # 2. Set Job.status to READY_TO_INGEST
+        from app.storage.models import Job
+        job = session.query(Job).get(job_id)
+        if job:
+            job.status = "READY_TO_INGEST"
+            logger.info(f"Job {job_id} status updated to READY_TO_INGEST for user evidence flow.")
+
+        session.flush()
         
         return ClassifierHandlerResult(
             status="ok",
