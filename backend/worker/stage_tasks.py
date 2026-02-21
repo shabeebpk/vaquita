@@ -750,6 +750,12 @@ def fetch_stage(self, job_id: int):
                 ingest_stage.delay(job_id)
             else:
                 publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "no_sources"})
+                # No new papers; return to decision stage to reconsider strategy (e.g. try different query or halt)
+                job = session.query(Job).get(job_id)
+                if job:
+                    job.status = "PATH_REASONING_DONE"
+                    session.commit()
+                    decision_stage.delay(job_id)
     
     except Exception as e:
         logger.error(f"Fetch stage failed for job {job_id}: {e}")

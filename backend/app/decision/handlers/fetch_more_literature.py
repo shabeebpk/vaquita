@@ -3,6 +3,9 @@
 Records a fetch intent without fetching directly.
 Updates job status to FETCH_QUEUED and enqueues a background task for future ingestion.
 No immediate pipeline restart happens.
+
+Before setting FETCH_QUEUED, checks if max papers limit is reached.
+If max papers reached, halts with NO_HYPOTHESIS status instead.
 """
 
 import logging
@@ -14,11 +17,13 @@ from sqlalchemy.orm import Session
 from app.decision.handlers.base import Handler, HandlerResult
 from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
-from app.storage.models import Job
+from app.storage.models import Job, JobPaperEvidence
+from app.config.system_settings import system_settings
 
 logger = logging.getLogger(__name__)
 
 
+@register_handler("fetch_more_literature")
 class FetchMoreLiteratureHandler(Handler):
     """Schedules a fetch task without immediate execution."""
     
@@ -32,32 +37,66 @@ class FetchMoreLiteratureHandler(Handler):
     ) -> HandlerResult:
         """Execute fetch scheduling.
         
-        - Records the fetch intent (reason, timestamp, decision label)
-        - Updates job status to FETCH_QUEUED
-        - Enqueues a background task for future ingestion
+        - Checks if max papers limit is reached
+        - If limit reached: halts with NO_HYPOTHESIS status (COMPLETED)
+        - If limit not reached: records fetch intent and sets FETCH_QUEUED
         """
         try:
+            # Get max papers limit from system settings
+            max_papers = system_settings.SYSTEM_MAX_PAPERS_PER_JOB
+            
+            with Session(engine) as session:
+                # Count current papers for this job in JobPaperEvidence
+                paper_count = session.query(JobPaperEvidence).filter(
+                    JobPaperEvidence.job_id == job_id
+                ).count()
+                
+                job = session.query(Job).filter(Job.id == job_id).first()
+                if not job:
+                    logger.warning(f"Job {job_id} not found for status update")
+                    return HandlerResult(status="error", message=f"Job {job_id} not found", next_action="notify_user")
+                
+                # Check if we've reached max papers limit
+                if paper_count >= max_papers:
+                    job.status = "COMPLETED"
+                    session.commit()
+                    logger.info(
+                        f"Job {job_id} reached max papers limit ({paper_count}/{max_papers}). "
+                        f"Halting with NO_HYPOTHESIS."
+                    )
+                    
+                    return HandlerResult(
+                        status="ok",
+                        message=f"Maximum papers limit reached ({paper_count}/{max_papers}). Job completed.",
+                        next_action="show_termination_reason",
+                        data={
+                            "outcome": "max_papers_reached",
+                            "current_paper_count": paper_count,
+                            "max_papers": max_papers,
+                            "reason": "System reached maximum number of papers for this job"
+                        }
+                    )
+                
+                # Limit not reached - proceed with fetch scheduling
+                job.status = "FETCH_QUEUED"
+                session.commit()
+                logger.info(
+                    f"Job {job_id} marked FETCH_QUEUED by FetchMoreLiteratureHandler "
+                    f"(current papers: {paper_count}/{max_papers})"
+                )
+            
             # Extract reason from measurements if available
             measurements = decision_result.get("measurements", {})
             reason = measurements.get("reason_for_fetch", "Insufficient evidence; need more data")
             
-            # Update job status
-            with Session(engine) as session:
-                job = session.query(Job).filter(Job.id == job_id).first()
-                if job:
-                    job.status = "FETCH_QUEUED"
-                    session.commit()
-                    logger.info(f"Job {job_id} marked FETCH_QUEUED by FetchMoreLiteratureHandler")
-                else:
-                    logger.warning(f"Job {job_id} not found for status update")
-            
-            # Optionally enqueue background task (currently deferred; can integrate with job_queue)
-            # For now, we record the intent and let external scheduler handle it
+            # Record fetch intent
             fetch_intent = {
                 "job_id": job_id,
                 "decision_label": decision_result.get("decision_label"),
                 "reason": reason,
                 "scheduled_at": datetime.utcnow().isoformat(),
+                "current_paper_count": paper_count,
+                "max_papers": max_papers,
                 "measurements": measurements,
             }
             
@@ -79,5 +118,4 @@ class FetchMoreLiteratureHandler(Handler):
             )
 
 
-# Register this handler
-register_handler("fetch_more_literature", FetchMoreLiteratureHandler)
+# FetchMoreLiteratureHandler is now registered via decorator above.

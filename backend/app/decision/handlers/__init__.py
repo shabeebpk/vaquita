@@ -10,15 +10,11 @@ from app.decision.handlers.registry import get_handler_for_decision, get_global_
 from app.decision.handlers.controller import HandlerController, get_handler_controller
 
 # Import all handler modules to trigger registration
-from app.decision.handlers import (
-    halt_confident,
-    fetch_more_literature,
-    ask_domain_expert,
-    ask_user_input,
-    insufficient_signal,
-    undecided,
-    strategic_download,
-)
+import app.decision.handlers.halt_confident
+import app.decision.handlers.halt_no_hypothesis
+import app.decision.handlers.fetch_more_literature
+import app.decision.handlers.insufficient_signal
+import app.decision.handlers.strategic_download
 
 __all__ = [
     "get_handler_for_decision",

@@ -1,6 +1,5 @@
 
 import os
-from typing import Optional, List, Union
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,16 +17,19 @@ class SystemSettings(BaseSettings):
     
     # Infrastructure
     DATABASE_URL: str = Field(...)
-    REDIS_URL: str = Field("redis://localhost:6379/0")
-    CELERY_BROKER_URL: str = Field("redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: str = Field("redis://localhost:6379/1")
+    REDIS_URL: str = Field(...)
+    CELERY_BROKER_URL: str = Field(...)
+    CELERY_RESULT_BACKEND: str = Field(...)
     
-    # LLM Infrastructure (Secrets only)
-    NVIDIA_BASE_URL: Optional[str] = Field(None)
-    NVIDIA_API_KEY: Optional[str] = Field(None)
-    LLM_MODEL: Optional[str] = Field(None)
-    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = Field(None)
-    SEMANTIC_SCHOLAR_URL: str = Field("https://api.semanticscholar.org/graph/v1/paper/search")
+    # LLM Infrastructure (from .env only)
+    NVIDIA_BASE_URL: str = Field(...)
+    NVIDIA_API_KEY: str = Field(...)
+    LLM_MODEL: str = Field(...)
+    SEMANTIC_SCHOLAR_API_KEY: str = Field(...)
+    SEMANTIC_SCHOLAR_URL: str = Field(...)
+    
+    # System constraints (from .env only)
+    SYSTEM_MAX_PAPERS_PER_JOB: int = Field(...)
 
 
 # Singleton instance

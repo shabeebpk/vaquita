@@ -123,14 +123,14 @@ def get_or_create_search_query(
         source = hypothesis.get("source", "")
         target = hypothesis.get("target", "")
         query_text = f"relationship between {source} and {target}"
+        logger.info(f"Query without foucs areas: {query_text}")
     
     # Inject focus areas: AND/OR query expansion
     if focus_areas:
         focus_str = " OR ".join(focus_areas)
         query_text = f"({query_text}) AND ({focus_str})"
-        logger.debug(f"Enhanced query with focus_areas: {query_text}")
-        query_text = f"relationship between {source} and {target}"
-    
+        logger.info(f"Enhanced query with focus_areas: {query_text}")
+
     # Inherit domain from hypothesis (Domain Resolution Contract)
     resolved_domain = hypothesis.get("domain")
     

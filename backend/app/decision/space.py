@@ -10,9 +10,6 @@ from typing import Set
 class Decision(Enum):
     """Enumeration of all possible decisions after Phase-4.5."""
     
-    # Undecided: unable to reach conclusion
-    UNDECIDED = "undecided"
-    
     # Insufficient signal: not enough data for confident decision
     INSUFFICIENT_SIGNAL = "insufficient_signal"
     
@@ -21,10 +18,6 @@ class Decision(Enum):
     
     # No hypothesis path: no evidence of indirect path growth or support
     HALT_NO_HYPOTHESIS = "halt_no_hypothesis"
-    
-    # Need external input
-    ASK_DOMAIN_EXPERT = "ask_domain_expert"
-    ASK_USER_INPUT = "ask_user_input"
     
     # Need more data
     FETCH_MORE_LITERATURE = "fetch_more_literature"

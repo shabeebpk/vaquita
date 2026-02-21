@@ -44,6 +44,8 @@ class DecisionConfig:
         
         # ===== Stability Cycle Threshold =====
         self.STABILITY_CYCLE_THRESHOLD = dt.stability_cycle_threshold
+        self.MIN_ABSOLUTE_GROWTH_THRESHOLD = dt.min_absolute_growth_threshold
+        self.MIN_RELATIVE_GROWTH_THRESHOLD = dt.min_relative_growth_threshold
         
         # ===== Filtering Thresholds =====
         self.PASSED_TO_TOTAL_RATIO_THRESHOLD = dt.passed_to_total_ratio_threshold

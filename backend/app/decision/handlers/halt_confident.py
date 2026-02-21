@@ -19,6 +19,7 @@ from app.storage.models import Job
 logger = logging.getLogger(__name__)
 
 
+@register_handler("halt_confident")
 class HaltConfidentHandler(Handler):
     """Finalizes a job by selecting the top hypothesis and marking complete."""
     
@@ -86,5 +87,4 @@ class HaltConfidentHandler(Handler):
             )
 
 
-# Register this handler
-register_handler("halt_confident", HaltConfidentHandler)
+# HaltConfidentHandler is now registered via decorator above.

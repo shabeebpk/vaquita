@@ -18,6 +18,7 @@ from app.storage.models import Job
 logger = logging.getLogger(__name__)
 
 
+@register_handler("insufficient_signal")
 class InsufficientSignalHandler(Handler):
     """Requests more input when signal is insufficient."""
     
@@ -90,5 +91,4 @@ class InsufficientSignalHandler(Handler):
             )
 
 
-# Register this handler
-register_handler("insufficient_signal", InsufficientSignalHandler)
+# InsufficientSignalHandler is now registered via decorator above.

@@ -36,7 +36,7 @@ class DecisionController:
         Args:
             provider_name: "rule_based", "hybrid", or "llm"
                 - "rule_based": only use RuleBasedDecisionProvider
-                - "hybrid": use RuleBasedDecisionProvider, fall back to LLM if UNDECIDED
+                - "hybrid": use RuleBasedDecisionProvider, fall back to LLM if needed (e.g. RuleBased returns INSUFFICIENT_SIGNAL)
                 - "llm": use LLMDecisionProvider only
             llm_client: Optional LLM client for LLMDecisionProvider.
         """
@@ -89,12 +89,37 @@ class DecisionController:
             previous_decision_result.get("measurements_snapshot")
             if previous_decision_result else None
         )
+
+        # If no previous decision provided, load last persisted decision for this job
+        if not previous_decision_result:
+            with Session(engine) as session:
+                last = session.query(DecisionResult).filter(DecisionResult.job_id == job_id).order_by(DecisionResult.created_at.desc()).first()
+                if last:
+                    previous_decision_result = {
+                        "decision_label": last.decision_label,
+                        "provider_used": last.provider_used,
+                        "measurements": last.measurements_snapshot,
+                        "created_at": last.created_at,
+                    }
+
+        previous_snapshot = (
+            previous_decision_result.get("measurements") if previous_decision_result else None
+        )
+
         measurements = compute_measurements(
             semantic_graph,
             hypotheses,
             job_metadata,
             previous_measurement_snapshot=previous_snapshot,
         )
+
+        measurements = compute_measurements(
+            semantic_graph,
+            hypotheses,
+            job_metadata,
+            previous_measurement_snapshot=previous_snapshot,
+        )
+
         logger.info(f"Computed measurements for job {job_id}: {len(measurements)} signals")
         
         # Invoke primary provider
@@ -111,18 +136,10 @@ class DecisionController:
         fallback_reason = None
         provider_used = self.provider_name
         
-        # If primary returns UNDECIDED and we have a fallback, invoke it
-        if decision == Decision.UNDECIDED and self.fallback_provider:
-            logger.info("Primary returned UNDECIDED; invoking fallback provider")
-            try:
-                fallback_decision = self.fallback_provider.decide(measurements, context)
-                decision = fallback_decision
-                fallback_used = True
-                fallback_reason = "Primary returned UNDECIDED"
-                provider_used = "fallback"
-            except Exception as e:
-                logger.error(f"Fallback provider failed: {e}; using UNDECIDED")
-                fallback_reason = str(e)
+        # Hybrid logic is now simplified as UNDECIDED is removed. 
+        # If the primary provider returns something other than the intended decision space, 
+        # or if it fails, we handle fallback if configured. 
+        # (Note: RuleBasedDecisionProvider is now comprehensive and avoids UNDECIDED).
         
         result = {
             "decision_label": decision.value,

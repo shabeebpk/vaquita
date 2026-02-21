@@ -55,12 +55,20 @@ class HandlerRegistry:
 _global_registry = HandlerRegistry()
 
 
-def register_handler(decision_label: str, handler_class: Type[Handler]) -> None:
+def register_handler(decision_label: str, handler_class: Type[Handler] | None = None):
     """Register a handler in the global registry.
     
-    Intended for use at module load time.
+    Supports two styles:
+    1. Decorator: @register_handler("my_decision")
+    2. Direct call: register_handler("my_decision", MyHandlerClass)
     """
-    _global_registry.register(decision_label, handler_class)
+    def decorator(cls):
+        _global_registry.register(decision_label, cls)
+        return cls
+    
+    if handler_class is None:
+        return decorator
+    return decorator(handler_class)
 
 
 def get_handler_for_decision(decision_label: str) -> Type[Handler] | None:

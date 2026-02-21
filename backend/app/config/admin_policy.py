@@ -54,6 +54,8 @@ class DecisionThresholds(BaseModel):
     sparse_graph_density_threshold: float = 0.05
     path_support_threshold: int = 2
     stability_cycle_threshold: int = 3
+    min_absolute_growth_threshold: float = 0.5
+    min_relative_growth_threshold: float = 0.1
     passed_to_total_ratio_threshold: float = 0.2
     minimum_hypotheses_threshold: int = 1
     semantic_similarity_threshold: float = 0.7

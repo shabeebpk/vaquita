@@ -135,16 +135,18 @@ class FetchService:
                     continue
 
                 # 5. Global Deduplication and Persistence
-                persisted, accepted_ids, rejected_ids = self._deduplicate_and_persist(candidates, session)
+                all_found_papers = self._deduplicate_and_persist(candidates, session)
                 
                 # 6. Job-level Deduplication
-                run_fetched_ids = []
-                for pid in (accepted_ids + rejected_ids):
-                    if pid not in seen_ids:
-                        run_fetched_ids.append(pid)
-                        seen_ids.add(pid)
+                # We identify papers that are new TO THIS JOB.
+                # These might be newly persisted Papers OR existing ones from global DB.
+                job_new_papers = []
+                for paper in all_found_papers:
+                    if paper.id not in seen_ids:
+                        job_new_papers.append(paper)
+                        seen_ids.add(paper.id)
 
-                # 7. Record SearchQueryRun (Log only)
+                # 7. Record SearchQueryRun (Log behavior)
                 search_run = record_search_run(
                     search_query=search_query,
                     job_id=job_id,
@@ -155,43 +157,25 @@ class FetchService:
                 )
                 
                 # 8. Update JobPaperEvidence (Strategic Ledger)
-                # We only add papers that are NEW to this job (not in seen_ids)
+                # We only add papers that are NEW to this job
                 from app.storage.models import JobPaperEvidence
                 
-                all_found_ids = accepted_ids + rejected_ids
-                
-                for pid in all_found_ids:
-                    # Check if we already have evidence for this paper in this job
-                    # (seen_ids check above handles the bulk, but let's be safe/explicit if needed)
-                    # The requirement is: "new table only have rows that if the paper is unique entry to this job"
-                    
-                    # We already filtered run_fetched_ids to be unique to the job.
-                    # BUT accepted_ids/rejected_ids contain ALL from this run.
-                    # We should iterate over run_fetched_ids (which are the new ones).
-                    pass
-                
-                for pid in run_fetched_ids:
-                     # Double check uniqueness (though run_fetched_ids should be unique)
-                     exists = session.query(JobPaperEvidence).filter(
-                         JobPaperEvidence.job_id == job_id,
-                         JobPaperEvidence.paper_id == pid
-                     ).count() > 0
-                     
-                     if not exists:
-                         new_evidence = JobPaperEvidence(
-                             job_id=job_id,
-                             run_id=search_run.id,
-                             paper_id=pid,
-                             evaluated=False,
-                             impact_score=0.0,
-                             hypo_ref_count=0,
-                             cumulative_conf=0.0,
-                             entity_density=0
-                         )
-                         session.add(new_evidence)
+                for paper in job_new_papers:
+                     new_evidence = JobPaperEvidence(
+                         job_id=job_id,
+                         run_id=search_run.id,
+                         paper_id=paper.id,
+                         evaluated=False,
+                         impact_score=0.0,
+                         hypo_ref_count=0,
+                         cumulative_conf=0.0,
+                         entity_density=0
+                     )
+                     session.add(new_evidence)
 
-                # 8. Create IngestionSources
-                self._create_ingestion_sources(job_id, persisted, session)
+                # 9. Create IngestionSources
+                # We must ingest papers that are new to this job so their abstracts/PDFs are processed
+                self._create_ingestion_sources(job_id, job_new_papers, session)
 
             except Exception as e:
                 logger.error(f"FetchService: Error processing hypothesis {hypo.get('id')}: {e}", exc_info=True)
@@ -221,23 +205,18 @@ class FetchService:
                 errors.append(f"{name}: {str(e)}")
 
         if errors:
-            # If we had errors but no results from anyone, we could raise but let's just log for now
-            # as per user: "If all providers failed: raise FetchServiceError."
-            # Actually, the user says "If all providers failed: raise FetchServiceError."
-            # This applies if we EXPECTED results or if NO provider was even try-able?
-            # Let's raise if we reached the end with errors and zero results.
+            # If they all failed (raised exception), but returned zero or we caught them:
             if not any(self.providers.get(n) for n in provider_order):
                 raise FetchServiceError(f"No active providers available for domain '{domain}'")
-            # If they all failed (raised exception), but returned zero or we caught them:
             raise FetchServiceError(f"All providers failed for domain '{domain}': {'; '.join(errors)}")
 
         return [], "none"
 
-    def _deduplicate_and_persist(self, candidates: List[Dict[str, Any]], session: Session) -> Tuple[List[Paper], List[int], List[int]]:
-        """Reuse existing deduplication framework."""
-        persisted = []
-        accepted_ids = []
-        rejected_ids = []
+    def _deduplicate_and_persist(self, candidates: List[Dict[str, Any]], session: Session) -> List[Paper]:
+        """
+        Deduplicates against global DB and returns Paper objects for all valid candidates.
+        """
+        all_papers = []
         
         for candidate in candidates:
             # Check for duplicate via standard framework
@@ -245,16 +224,19 @@ class FetchService:
             
             if dup_result.is_duplicate:
                 if dup_result.matched_paper_id is not None:
-                    rejected_ids.append(dup_result.matched_paper_id)
+                    # Globally known paper - retrieve existing object
+                    paper = session.query(Paper).get(dup_result.matched_paper_id)
+                    if paper:
+                        all_papers.append(paper)
             else:
                 try:
+                    # Globally new paper - persist it
                     paper = persist_paper(candidate, session, self.fingerprint_config)
-                    persisted.append(paper)
-                    accepted_ids.append(paper.id)
+                    all_papers.append(paper)
                 except Exception as e:
                     logger.error(f"FetchService: Failed to persist paper: {e}")
         
-        return persisted, accepted_ids, rejected_ids
+        return all_papers
 
     def _create_ingestion_sources(self, job_id: int, papers: List[Paper], session: Session):
         """Create IngestionSource entries for new papers."""
