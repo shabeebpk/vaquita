@@ -33,6 +33,9 @@ def normalize_triple_component(s: str) -> str:
     # Remove trailing punctuation
     s = re.sub(r'[.,;:]+$', '', s).strip()
     
+    # Strip quotes (both straight and curly)
+    s = s.strip('"\'“”‘’')
+    
     return s
 
 

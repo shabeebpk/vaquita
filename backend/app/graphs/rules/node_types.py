@@ -1,197 +1,98 @@
-"""Node type classification rules for Phase-2.5 graph sanitization.
+"""Node classification for Phase-2.5 graph sanitization.
 
-This module defines rules for classifying nodes into one of five types:
-- concept: abstract nouns suitable for reasoning (hypothesis, model, method)
-- entity: proper nouns, named persons, organizations, acronyms
-- metadata: years, numeric IDs, DOIs, ISBNs, ISSNs, URLs
-- citation: citation-only nodes (pure references)
-- noise: malformed or meaningless fragments
+A node is REMOVED if it matches any configured removal pattern or exact string.
+Everything else is kept as a concept — no hardcoded allow-lists.
+
+Classification (for nodes that survive removal):
+- noise   : matched a removal pattern or exact string
+- concept : everything else (scientific terms, techniques, processes, models)
+
+The removal patterns and exact strings are loaded from admin_policy.json
+under graph_rules.node_removal_patterns and graph_rules.node_removal_exact.
+No hardcoded lists exist here.
 """
 import re
+import logging
+from typing import Tuple
 
-# Concept allow-list: structural/scientific terms common across domains
-CONCEPT_ALLOW_LIST = {
-    "model",
-    "method",
-    "dataset",
-    "algorithm",
-    "hypothesis",
-    "system",
-    "generation",
-    "training",
-    "evaluation",
-    "experiment",
-    "metric",
-    "result",
-    "approach",
-    "technique",
-    "framework",
-    "architecture",
-    "theory",
-    "principle",
-    "assumption",
-    "objective",
-    "outcome",
-    "parameter",
-    "variable",
-    "process",
-    "procedure",
-    "analysis",
-    "implementation",
-    "application",
-    "strategy",
-    "component",
-    "module",
-    "layer",
-    "stage",
-}
+logger = logging.getLogger(__name__)
 
-# Entity NER labels from spaCy that indicate entities (from Phase-2 doc processing)
-# These are re-checked during sanitization if entity label info is available
-ENTITY_NER_LABELS = {"PERSON", "ORG", "GPE", "PRODUCT"}
 
-# Acronym pattern: 2+ uppercase letters, optionally with numbers
-ACRONYM_PATTERN = r"^[A-Z][A-Z0-9]+$"
+def _load_rules() -> Tuple[list, set]:
+    """Load removal rules from admin_policy config. Returns (compiled_patterns, exact_set)."""
+    try:
+        from app.config.admin_policy import admin_policy
+        raw_patterns = admin_policy.graph_rules.node_removal_patterns
+        exact_words = set(w.lower() for w in admin_policy.graph_rules.node_removal_exact)
+        compiled = []
+        for p in raw_patterns:
+            try:
+                compiled.append(re.compile(p, re.IGNORECASE))
+            except re.error as e:
+                logger.warning(f"node_types: Invalid removal pattern {p!r}: {e}")
+        return compiled, exact_words
+    except Exception as e:
+        logger.error(f"node_types: Failed to load graph_rules from admin_policy: {e}. Using empty rules.")
+        return [], set()
 
-# Metadata patterns
-YEAR_PATTERN = r"^(19|20)\d{2}$"
-DOI_PATTERN = r"^(doi:|10\.\d+/.*)"
-ISBN_PATTERN = r"^(?:ISBN|isbn)[\s-]?(?:10|13)?[\s-]?[\d\s-]+$"
-ISSN_PATTERN = r"^(?:ISSN|issn)[\s-]?\d{4}[\s-]?\d{4}$"
-URL_PATTERN = r"^https?://|^www\."
-ARXIV_PATTERN = r"^arxiv:\d+\.\d+$"
-PMID_PATTERN = r"^(?:PMID|pmid):\d+$"
 
-# Numeric-only or pure ID patterns
-NUMERIC_ONLY_PATTERN = r"^\d+$"
-UUID_LIKE_PATTERN = r"^[a-f0-9\-]{20,}$"
-
-# Citation-only patterns: node is purely a reference with no semantic content
-CITATION_KEYWORDS = {"citation", "reference", "cite", "ref"}
-
-# Noise deny-list: patterns that are clearly malformed or meaningless
-NOISE_PATTERNS = [
-    r"^[^\w\s]$",  # single punctuation
-    r"^\.{2,}$",  # ellipsis only
-    r"^[_\-\s]*$",  # dashes/underscores/spaces only
-    r"^[0-9\.\-]{1,3}$",  # very short numeric fragments
-]
-
-# Blacklist: strings that are definitely noise regardless of other rules
-NOISE_BLACKLIST = {
-    "the",
-    "a",
-    "an",
-    "of",
-    "and",
-    "or",
-    "to",
-    "in",
-    "is",
-    "are",
-    "be",
-    "by",
-    "for",
-    "with",
-    "as",
-    "from",
-    "on",
-    "at",
-    "this",
-    "that",
-    "which",
-    "who",
-    "what",
-    "where",
-    "when",
-    "why",
-    "how",
-    "",
-}
-
-PUBLISHER_KEYWORDS = {
-    "arxiv",
-    "pubmed",
-    "ieee",
-    "springer",
-    "elsevier",
-    "acm",
-    "nature",
-    "science",
-    "neurips",
-    "icml",
-    "iclr",
-    "aaai",
-    "cvpr",
-    "eccv",
-    "sigir",
-    "kdd",
-}
-
+# Load once at import time
+_REMOVAL_PATTERNS, _REMOVAL_EXACT = _load_rules()
 
 
 def classify_node(node: str, ner_label: str = None) -> str:
-    """Classify a single node into one of: concept, entity, metadata, citation, noise.
-    
+    """Classify a single node as 'noise' (will be removed) or 'concept' (kept).
+
     Args:
         node: node text
-        ner_label: optional spaCy NER label from Phase-2 processing
-    
-    Returns: classification string
+        ner_label: unused — kept for backward compatibility only
+
+    Returns:
+        'noise' if the node should be removed, 'concept' otherwise.
     """
     if not node or not isinstance(node, str):
         return "noise"
-    
+
     n = node.strip()
     if not n:
         return "noise"
-    
-    # Noise blacklist (stop words, empty)
-    if n.lower() in NOISE_BLACKLIST:
+
+    # Exact match against removal list (lowercased)
+    if n.lower() in _REMOVAL_EXACT:
         return "noise"
-    
-    # Noise patterns
-    for pattern in NOISE_PATTERNS:
-        if re.match(pattern, n):
+
+    # Pattern match against removal regexes
+    for pattern in _REMOVAL_PATTERNS:
+        if pattern.match(n):
             return "noise"
-    
-    # Metadata: identifiers and references
-    if re.match(YEAR_PATTERN, n):
-        return "metadata"
-    if re.match(DOI_PATTERN, n, re.I):
-        return "metadata"
-    if re.match(ISBN_PATTERN, n):
-        return "metadata"
-    if re.match(ISSN_PATTERN, n):
-        return "metadata"
-    if re.match(URL_PATTERN, n):
-        return "metadata"
-    if re.match(ARXIV_PATTERN, n, re.I):
-        return "metadata"
-    if re.match(PMID_PATTERN, n, re.I):
-        return "metadata"
-    if re.match(NUMERIC_ONLY_PATTERN, n) and len(n) <= 5:
-        return "metadata"
-    if re.match(UUID_LIKE_PATTERN, n):
-        return "metadata"
-    if n.lower() in PUBLISHER_KEYWORDS:
-        return "metadata"
-    
-    # Entity: NER label, acronym, or proper case
-    if ner_label and ner_label in ENTITY_NER_LABELS:
-        return "entity"
-    if re.match(ACRONYM_PATTERN, n):
-        return "entity"
-    if n[0].isupper() and len(n) > 1:  # capitalized (potential proper noun)
-        return "entity"
-    
-    # Citation-only
-    if any(kw in n.lower() for kw in CITATION_KEYWORDS):
-        return "citation"
-    
-    # Concept: in allow-list or looks like abstract noun
-    if n.lower() in CONCEPT_ALLOW_LIST:
-        return "concept"
-    
-    # Default to concept if none of the above (conservative fallback)
+
+    # Everything else is a valid scientific concept
     return "concept"
+
+
+def is_impactful_node(text: str) -> bool:
+    """Heuristic to check if a node is an 'impactful entity' for scoring.
+    
+    Includes: acronyms, proper nouns (capitalized), and long scientific phrases.
+    Excludes: noise (already handled by classify_node) and very short common words.
+    """
+    if not text or len(text) < 2:
+        return False
+        
+    # If it's all uppercase acronym (e.g., DNA, CRISPR, GPT)
+    if text.isupper() and text.isalpha():
+        return True
+        
+    # If it's a multi-word scientific concept (e.g., "gene editing")
+    if " " in text:
+        return True
+        
+    # If it's a proper noun (starts with capital)
+    if text[0].isupper():
+        return True
+        
+    # If it contains special characters like hyphens or numbers (likely a model or chemical)
+    if "-" in text or any(char.isdigit() for char in text):
+        return True
+        
+    return False

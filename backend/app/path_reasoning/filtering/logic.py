@@ -13,17 +13,32 @@ import networkx as nx
 from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 from app.storage.models import JobPaperEvidence, Triple, IngestionSource
-from app.graphs.rules.node_types import classify_node
+from app.graphs.rules.node_types import is_impactful_node
 
 logger = logging.getLogger(__name__)
 
-# Default Configuration
-DEFAULT_CONFIG = {
-    "hub_degree_threshold": 50,  # Max degree for intermediate nodes
-    "min_confidence": 2,         # Minimum evidence score
-    "generic_predicates": {"related_to", "mentions", "about"},
-    "forbidden_node_types": {"entity", "metadata", "citation", "url"},
-}
+
+def _load_default_config() -> Dict[str, Any]:
+    """Load filtering defaults from admin_policy. No hardcoding."""
+    try:
+        from app.config.admin_policy import admin_policy
+        pr = admin_policy.algorithm.path_reasoning_defaults
+        generic = set(admin_policy.graph_rules.generic_predicates)
+        return {
+            "hub_degree_threshold": pr.hub_degree_threshold if hasattr(pr, "hub_degree_threshold") else 50,
+            "min_confidence": pr.min_confidence if hasattr(pr, "min_confidence") else 2,
+            "generic_predicates": generic,
+        }
+    except Exception as e:
+        logger.warning(f"Could not load filtering config from admin_policy: {e}. Using safe defaults.")
+        return {
+            "hub_degree_threshold": 50,
+            "min_confidence": 2,
+            "generic_predicates": set(),
+        }
+
+
+DEFAULT_CONFIG = _load_default_config()
 
 @dataclass
 class FilteringContext:
@@ -31,18 +46,16 @@ class FilteringContext:
     graph: nx.DiGraph
     degrees: Dict[str, int]
     config: Dict[str, Any]
-    
+
     # Fast path for commonly accessed config values
     hub_threshold: int = field(init=False)
     min_confidence: int = field(init=False)
     generic_predicates: Set[str] = field(init=False)
-    forbidden_types: Set[str] = field(init=False)
 
     def __post_init__(self):
         self.hub_threshold = self.config.get("hub_degree_threshold", 50)
         self.min_confidence = self.config.get("min_confidence", 2)
         self.generic_predicates = self.config.get("generic_predicates", set())
-        self.forbidden_types = self.config.get("forbidden_node_types", set())
 
 
 def _graph_to_nx_for_filtering(semantic_graph: Dict) -> nx.DiGraph:
@@ -84,17 +97,6 @@ def check_hub_suppression(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optio
     return True, None
 
 
-def check_role_constraints(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optional[str]]:
-    """Rule 2: Reject paths containing forbidden node types (entity, metadata, etc)."""
-    path = hyp.get("path", [])
-    for node in path:
-        if not ctx.graph.has_node(node):
-            continue
-        ntype = ctx.graph.nodes[node].get("type", "concept")
-        if ntype and ntype.lower() in ctx.forbidden_types:
-            return False, f"Node '{node}' has forbidden type '{ntype}'"
-    return True, None
-
 
 def check_predicate_semantics(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optional[str]]:
     """Rule 3: Require at least one non-generic predicate."""
@@ -125,10 +127,11 @@ def check_novelty(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optional[str]
     return True, None
 
 
-# Check registry (Ordered)
+# Check registry (Ordered) — only reversible rejections stored here.
+# Permanent structural filters (noise) are applied by
+# sanitize_graph in sanitize.py BEFORE paths are generated.
 RULES = [
     ("hub_suppression", check_hub_suppression),
-    ("role_constraint", check_role_constraints),
     ("predicate_semantics", check_predicate_semantics),
     ("evidence_threshold", check_evidence_threshold),
     ("novelty", check_novelty),
@@ -207,42 +210,49 @@ def filter_hypotheses(
 
 def calculate_impact_scores(job_id: int, hypotheses: List[Dict], session: Session) -> None:
     """
-    Calculate and update Impact Scores for all papers in the Strategic Ledger.
-    
+    Calculate and update Impact Scores for ALL papers in the Strategic Ledger.
+
     Formula:
     score = (hyp_ref_count) + (sum_of_confidence) + (new_entity_count)
-    
-    Context:
-    - Only hypotheses that are 'Passed' or 'Low Confidence' (promising) are used.
-    - Updated into JobPaperEvidence table for the job.
-    - Performance: Reuses existing database triples to avoid LLM cost.
+
+    IMPORTANT: Always uses ALL hypotheses for the job from the database, not just
+    the current batch. This ensures every paper gets a fair, up-to-date score
+    regardless of which fetch/hypothesis batch originally discovered it.
     """
-    from .logic import is_low_confidence_rejection # local avoid circular
-    
-    # 1. Filter hypotheses to relevant leads (Passed or Promising)
+    from app.storage.models import Hypothesis as HypothesisModel
+
+    # 1. Load ALL passed or promising hypotheses for the job from DB
+    # This is the key fix: we don't restrict to the current batch
+    all_job_hypos = session.query(HypothesisModel).filter(
+        HypothesisModel.job_id == job_id,
+        HypothesisModel.is_active == True,
+    ).all()
+
     relevant_hypos = [
-        h for h in hypotheses 
-        if h.get("passed_filter", False) or is_low_confidence_rejection(h)
+        h for h in all_job_hypos
+        if h.passed_filter or (
+            not h.passed_filter and
+            h.filter_reason and
+            list(h.filter_reason.keys()) == ["evidence_threshold"]
+        )
     ]
-    
+
     if not relevant_hypos:
         logger.info(f"Job {job_id}: No passed or promising hypotheses to compute impact scores.")
         return
 
     # 2. Build Paper -> Impact Metrics map
-    # We want to know which paper supports which hypothesis.
-    paper_metrics: Dict[int, Dict[str, Any]] = {}  # paper_id -> {refs: 0, conf: 0.0}
-    
-    # Pre-fetch all Triples for these hypotheses for speed
+    paper_metrics: Dict[int, Dict[str, Any]] = {}
+
+    # Collect all triple IDs from all relevant hypotheses
     all_triple_ids = []
     for h in relevant_hypos:
-        all_triple_ids.extend(h.get("triple_ids", []))
-    
+        all_triple_ids.extend(h.triple_ids or [])
+
     if not all_triple_ids:
         return
 
-    # Map Triple ID -> Paper ID
-    # Triple -> IngestionSource -> paper:ID
+    # Map Triple ID -> Paper ID via IngestionSource
     triple_to_paper = {}
     triples_data = session.query(
         Triple.id, IngestionSource.source_ref
@@ -251,41 +261,35 @@ def calculate_impact_scores(job_id: int, hypotheses: List[Dict], session: Sessio
     ).filter(
         Triple.id.in_(list(set(all_triple_ids)))
     ).all()
-    
+
     for tid, s_ref in triples_data:
-        if s_ref.startswith("paper:"):
+        if s_ref and s_ref.startswith("paper:"):
             try:
                 pid = int(s_ref.split(":")[1])
                 triple_to_paper[tid] = pid
             except (ValueError, IndexError):
                 continue
-    
-    # 3. Aggregate metrics from Hypotheses
+
+    # 3. Aggregate metrics from ALL hypotheses
     for h in relevant_hypos:
-        conf = h.get("confidence", 0)
-        t_ids = h.get("triple_ids", [])
-        
-        # Unique papers referenced by this hypothesis
+        conf = h.confidence or 0
+        t_ids = h.triple_ids or []
+
         h_papers = {triple_to_paper[tid] for tid in t_ids if tid in triple_to_paper}
-        
+
         for pid in h_papers:
             if pid not in paper_metrics:
                 paper_metrics[pid] = {"refs": 0, "conf": 0.0, "entities": set()}
-            
             paper_metrics[pid]["refs"] += 1
             paper_metrics[pid]["conf"] += float(conf)
 
-    # 4. Calculate "New Entity Count" per paper
-    # Based on the Triples already extracted from its abstract.
-    # Strategic Investor: Evaluate ALL papers in JobPaperEvidence for this job.
+    # 4. Entity density from abstract triples for ALL ledger papers
     ledger_entries = session.query(JobPaperEvidence).filter(
         JobPaperEvidence.job_id == job_id
     ).all()
-    
+
     ledger_paper_ids = [e.paper_id for e in ledger_entries]
-    
-    # Get all entities from abstracts of these papers
-    # Concept: Only count "entity" type nodes in the subjects/objects
+
     abstract_triples = session.query(
         IngestionSource.source_ref, Triple.subject, Triple.object
     ).join(
@@ -294,34 +298,32 @@ def calculate_impact_scores(job_id: int, hypotheses: List[Dict], session: Sessio
         IngestionSource.job_id == job_id,
         IngestionSource.source_ref.in_([f"paper:{pid}" for pid in ledger_paper_ids])
     ).all()
-    
+
     for s_ref, subj, obj in abstract_triples:
         try:
             pid = int(s_ref.split(":")[1])
             if pid not in paper_metrics:
                 paper_metrics[pid] = {"refs": 0, "conf": 0.0, "entities": set()}
-            
-            if classify_node(subj) == "entity":
+            if is_impactful_node(subj):
                 paper_metrics[pid]["entities"].add(subj)
-            if classify_node(obj) == "entity":
+            if is_impactful_node(obj):
                 paper_metrics[pid]["entities"].add(obj)
-        except:
+        except Exception:
             continue
 
-    # 5. Update Database (Strategic Ledger)
+    # 5. Update ALL ledger entries — every paper gets recalculated
+    updated = 0
     for entry in ledger_entries:
         metrics = paper_metrics.get(entry.paper_id, {"refs": 0, "conf": 0.0, "entities": set()})
-        
         entry.hypo_ref_count = metrics["refs"]
         entry.cumulative_conf = metrics["conf"]
         entry.entity_density = len(metrics["entities"])
-        
-        # Impact Score = refs + conf + entities
         entry.impact_score = float(
-            entry.hypo_ref_count + 
-            entry.cumulative_conf + 
+            entry.hypo_ref_count +
+            entry.cumulative_conf +
             entry.entity_density
         )
-        
+        updated += 1
+
     session.commit()
-    logger.info(f"Job {job_id}: Updated Impact Scores for {len(ledger_entries)} papers in Strategic Ledger.")
+    logger.info(f"Job {job_id}: Recalculated impact scores for {updated} papers using {len(relevant_hypos)} total hypotheses.")

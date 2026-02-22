@@ -17,16 +17,12 @@ Notes:
 from __future__ import annotations
 
 from typing import Dict, List, Tuple, Iterable, Optional, Set
-import os
 import logging
 
 import networkx as nx
 
 logger = logging.getLogger(__name__)
 
-# Default stoplist for trivial intermediate concepts (empty by default)
-DEFAULT_STOPLIST = set(["study", "result", "finding"])  # can be overridden
-METADATA_NODE_TYPES = {"metadata", "citation"}
 
 
 def _graph_to_nx(semantic_graph: Dict) -> nx.DiGraph:
@@ -147,16 +143,14 @@ def _paths_query(G: nx.DiGraph, seeds: Set[str], alias_map: Dict[str, str], max_
 
 
 def _path_contains_bad_node(path: List[str], G: nx.DiGraph, stoplist: Set[str]) -> bool:
-    """Return True if path should be discarded due to metadata/citation nodes, stoplisted intermediates, or cycles."""
+    """Return True if path should be discarded due to stoplisted intermediates or cycles.
+
+    Note: forbidden node type check (entity/metadata/citation/url) is done BEFORE
+    path reasoning via prune_forbidden_nodes — not here.
+    """
     # Reject repeated nodes (cycles)
     if len(path) != len(set(path)):
         return True
-
-    # Reject if any node is metadata or citation
-    for n in path:
-        ntype = G.nodes[n].get("type")
-        if ntype in METADATA_NODE_TYPES:
-            return True
 
     # For intermediate nodes (excluding first and last), reject stoplist
     for n in path[1:-1]:
@@ -287,11 +281,11 @@ def run_path_reasoning(
     if reasoning_mode not in {"explore", "query"}:
         raise ValueError("reasoning_mode must be 'explore' or 'query'")
 
-    stoplist = set(s.lower() for s in (stoplist or DEFAULT_STOPLIST))
+    stoplist = set(s.lower() for s in (stoplist or []))
     preferred_predicates = set(p.lower() for p in (preferred_predicates or []))
     preferred_predicate_boost_factor = max(1.0, min(2.0, float(preferred_predicate_boost_factor)))
 
-    # Convert to graph once
+    # Convert to graph
     G = _graph_to_nx(semantic_graph)
     alias_map = _alias_to_canonical_map(semantic_graph)
 

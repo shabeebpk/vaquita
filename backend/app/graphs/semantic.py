@@ -138,10 +138,11 @@ def _select_canonical_labels(
         nodes_in_cluster = [concept_nodes[i] for i in indices]
         texts = [n.get("text", "") for n in nodes_in_cluster]
 
-        # Sort by: shortest first, then highest degree
+        # Strategy: Most frequent wins (highest degree). 
+        # Secondary: Longest phrase (more descriptive).
         sorted_texts = sorted(
             texts,
-            key=lambda t: (len(t), -degree_map.get(t, 0)),
+            key=lambda t: (-degree_map.get(t, 0), -len(t)),
         )
 
         canonical = sorted_texts[0]
@@ -205,7 +206,7 @@ def _rewrite_edges(
                 "source_ids": set(),
                 "block_ids": set(),
             }
-        
+
         meta = edge_dict[key]
         meta["support"] += support
         meta["triple_ids"].update(triple_ids)

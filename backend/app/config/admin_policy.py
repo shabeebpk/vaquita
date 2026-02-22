@@ -125,6 +125,11 @@ class PathReasoningDefaults(BaseModel):
     allow_len3: bool = True
     preferred_predicate_boost_factor: float = 1.2
     """Multiplier for confidence when preferred predicates found (min 1.0, max 2.0)."""
+    hub_degree_threshold: int = 50
+    """Max node degree for intermediate nodes in a path. High-degree hub nodes are suppressed."""
+    min_confidence: int = 2
+    """Minimum confidence score a hypothesis must have to pass the evidence threshold filter."""
+
 
 
 class DomainResolution(BaseModel):
@@ -148,6 +153,11 @@ class TripleExtractionConfig(BaseModel):
     delimiter: str = "|"
     model: Optional[str] = None
     max_tokens: int = 1000
+
+class DownloaderConfig(BaseModel):
+    """Configuration for strategic paper downloading."""
+    batch_size: int = 1
+    """Number of papers to download and ingest per cycle for 'Evenly Cooked' growth."""
 
 class Algorithm(BaseModel):
     """Algorithm-related configurations."""
@@ -212,6 +222,16 @@ class InputProcessing(BaseModel):
     preview_snippet_length: int = 300
 
 
+class GraphRules(BaseModel):
+    """Config-driven rules for graph node sanitization."""
+    node_removal_patterns: List[str] = Field(default_factory=list)
+    """Regex patterns — a node matching any of these is removed."""
+    node_removal_exact: List[str] = Field(default_factory=list)
+    """Exact lowercase strings that are always removed (stop words, etc)."""
+    generic_predicates: List[str] = Field(default_factory=list)
+    """Predicates considered too generic to contribute meaningful paths."""
+
+
 class AdminPolicy(BaseModel):
     """Root AdminPolicy model."""
     llm: LLMPolicy = Field(default_factory=LLMPolicy)
@@ -221,7 +241,9 @@ class AdminPolicy(BaseModel):
     prompt_assets: PromptAssets = Field(default_factory=PromptAssets)
     input_processing: InputProcessing = Field(default_factory=InputProcessing)
     decision_provider: str = "rule_based"
-    
+    graph_rules: GraphRules = Field(default_factory=GraphRules)
+    downloader: DownloaderConfig = Field(default_factory=DownloaderConfig)
+
     @field_validator('algorithm')
     @classmethod
     def validate_algorithm(cls, v):

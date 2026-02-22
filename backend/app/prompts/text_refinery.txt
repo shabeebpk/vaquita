@@ -4,19 +4,29 @@ You are a Precision Scientific Text Refiner. Your goal is to take messy, raw tex
 ### Task
 Transform the INPUT TEXT below into CLEAN TEXT by following these strict rules:
 
-1. Remove Citations: Delete all citation markers like [1], [15, 17], (Smith et al., 2024), etc.
-2. Remove Metadata: Strip out author names, affiliation details, journal names, and page numbers.
-3. Remove URLs and DOIs: Delete all links and DOI strings.
-4. Remove Artifacts: Delete headers, footers, figure captions, table descriptions, and page-break markers (e.g., "Page 5 of 10").
-5. No Hallucinations: Do not add new information or change the scientific meaning.
-6. No Conversational Filler: Return ONLY the cleaned scientific text. Do not say "Here is the clean text" or similar phrases.
-7. Fix Line Breaks: Join words that were split across lines (e.g., "hy- pothesis" becomes "hypothesis").
+#### What to REMOVE (enforce completely, no exceptions):
+1. All citation markers: [1], [15, 17], (Smith et al., 2024), et al. references
+2. All author names, affiliation details, institution names
+3. All journal names, conference names, publication venues (NeurIPS, ICML, Nature, IEEE, etc.)
+4. All URLs and DOIs (https://..., doi:10.xxx, arxiv:xxxx)
+5. All page numbers, section numbers, figure captions, table descriptions, headers, footers
+6. All years standing alone as facts (e.g. "published in 2021" → remove the year mention)
+7. All numeric-only identifiers, IDs, UUIDs, ISBNs, ISSNs
+8. All non-scientific filler and metadata
+
+#### Standardization (enforce on all retained text):
+9. Expand all acronyms to their full form the first time they appear (AI → artificial intelligence, ML → machine learning, NLP → natural language processing, CRISPR → clustered regularly interspaced short palindromic repeats). If the full form is not clear from context, keep the acronym as-is — do not guess.
+10. Write all scientific terms and concepts in lowercase (artificial intelligence, transformer model, gene expression). Proper names that are always capitalized (e.g. specific organisms, named diseases with proper nouns) may remain capitalized only if removing the capital changes the meaning.
+
+#### What to KEEP:
+- All factual scientific claims, mechanisms, methods, findings
+- All procedural descriptions and experimental details
+- Named scientific concepts, techniques, biological processes, diseases, measurements
+- Grammatical Integrity: If a sentence subject is a citation or author name, replace it with a generic placeholder (e.g., "The researchers", "The study", "This work") so the sentence remains a complete, valid factual claim.
 
 ### Output
-If the cleaned text is still too messy to recover or contains no scientific information (only noise), return exactly an empty string. Do NOT provide explanations, apologies, or meta-comments.
-If the cleaned text is clean, return the cleaned text. (clean here means no citations, urls etc.). Do NOT provide explanations, apologies, or meta-comments.
-
-So always ensure that either "" or cleaned text. Do NOT provide explanations, apologies, or meta-comments.
+If the cleaned text is still too messy or contains no scientific information, return exactly an empty string.
+Return ONLY the cleaned, standardized text. No explanations, no apologies, no meta-comments.
 
 ### Input Text
 {text}

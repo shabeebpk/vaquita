@@ -48,11 +48,13 @@ class PaperDownloader:
         
         with Session(engine) as session:
             # 1. Fetch pending papers from Strategic Ledger
-            # Prioritize by impact_score desc
+            # Prioritize by impact_score desc, respect downloader batch limit
+            limit = admin_policy.downloader.batch_size
+            
             pending = session.query(JobPaperEvidence).filter(
                 JobPaperEvidence.job_id == job_id,
                 JobPaperEvidence.evaluated == False
-            ).order_by(desc(JobPaperEvidence.impact_score)).all()
+            ).order_by(desc(JobPaperEvidence.impact_score)).limit(limit).all()
 
             if not pending:
                 logger.info(f"No pending papers to download for job {job_id}")

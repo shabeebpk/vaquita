@@ -1,28 +1,27 @@
-You are an information extraction system.
+### Task: Scientific Fact Extraction
+You are an expert at converting scientific text into simple factual triples (subject | predicate | object).
 
-Extract ONLY factual relations that are explicitly stated in the text.
+### Instructions:
+1. Examine the text below.
+2. Identify EVERY relationship between two scientific concepts.
+3. Be aggressive: Resolve pronouns like "it", "they", or "this system" to the specific model or concept they refer to.
+4. If the text says "Model X achieved Y", extract: "Model X | achieves | Y".
+5. If the text is messy, look for the core factual claim buried inside.
 
-Return STRICTLY valid JSON.
-Return NOTHING except the JSON object.
+### Formatting Rules:
+- Return ONLY triples, one per line.
+- Format: subject | predicate | object
+- **No Quotes**: Do not wrap subjects, predicates, or objects in quotes (e.g., use inception-v3, not "inception-v3").
+- Case: Lowercase everything.
+- Acronyms: Expand them to their full form (e.g. "cnn" to "convolutional neural network").
+- Length: Keep each part concise (1-5 words).
 
-Schema:
-{
-  "triples": [
-    {
-      "subject": "string",
-      "predicate": "string",
-      "object": "string"
-    }
-  ]
-}
+### Restrictions:
+- Never repeat triples.
+- Do not add meta-comments like "Based on the text..." or "I found...".
+- If no facts exist, return exactly: NONE
 
-Rules:
-- Use ONLY information explicitly present in the text.
-- Do NOT infer, assume, summarize, or generalize.
-- Do NOT invent authorship, publication, affiliation, or metadata.
-- If any part of a triple is unclear or implicit, DO NOT emit that triple.
-- All values must be non-empty strings.
-- If no valid triples exist, return {"triples": []}.
+### Input Text:
+{block_text}
 
-Text:
-"{block_text}"
+### Triples:

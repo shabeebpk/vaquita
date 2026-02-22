@@ -19,16 +19,16 @@ from app.storage.models import ReasoningQuery
 logger = logging.getLogger(__name__)
 
 
-def deactivate_hypotheses_for_job(job_id: int, affected_nodes: Set[str] = None) -> int:
+def deactivate_hypotheses_for_job(job_id: int, affected_nodes: Set[str] = None, modes: List[str] = None) -> int:
     """
-    Deactivate hypotheses affected by new nodes (soft delete for versioning).
-    
-    If affected_nodes provided, only deactivate hypotheses using those nodes.
-    Otherwise, deactivate all active hypotheses.
+    Deactivate hypotheses (soft delete for versioning).
     
     Args:
         job_id: The job ID.
-        affected_nodes: Optional set of new node texts.
+        affected_nodes: Optional set of new node texts. If provided, only
+                       hypotheses touching these nodes are deactivated.
+        modes: Optional list of modes to target (e.g., ["explore"]).
+               If None, targets all modes.
     
     Returns:
         Number of hypotheses deactivated.
@@ -38,6 +38,9 @@ def deactivate_hypotheses_for_job(job_id: int, affected_nodes: Set[str] = None) 
             Hypothesis.job_id == job_id,
             Hypothesis.is_active == True
         )
+        
+        if modes:
+            query = query.filter(Hypothesis.mode.in_(modes))
         
         if affected_nodes:
             hypotheses = query.all()
@@ -74,16 +77,17 @@ def delete_all_hypotheses_for_job(job_id: int) -> int:
 
 def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[int] = None, affected_nodes: Set[str] = None) -> int:
     """
-    Persist hypotheses with versioning.
+    Persist hypotheses with Full Snapshot versioning.
 
-    Deactivates affected hypotheses, inserts new ones with is_active=TRUE.
-    Domain calculation ONLY for new hypotheses (not pre-calculated ones).
+    Every call creates a NEW version containing the COMPLETE set of hypotheses
+    for that state. Old rows are marked is_active=FALSE. Existing hypotheses
+    re-inserted with the new version number will reuse cached domain/explanation.
 
     Args:
         job_id: The job ID.
-        hypotheses: List of hypothesis dicts.
+        hypotheses: The complete list of hypotheses for the current graph state.
         query_id: Optional query ID.
-        affected_nodes: Set of new nodes triggering rebuild (optional).
+        affected_nodes: Optional set of new nodes. Used to tag which ones are new.
 
     Returns:
         Number of rows inserted.
@@ -92,39 +96,64 @@ def persist_hypotheses(job_id: int, hypotheses: List[Dict], query_id: Optional[i
     from app.domains.resolver import resolve_domain
     from app.storage.models import Job
     
-    if affected_nodes:
-        deactivate_hypotheses_for_job(job_id, affected_nodes)
-    else:
-        deactivate_hypotheses_for_job(job_id)
+    if not hypotheses:
+        return 0
+
+    # 1. Determine modes in this batch (usually all "explore" or all "query")
+    batch_modes = list(set(h.get("mode", "explore") for h in hypotheses))
     
     llm_client = get_llm_service()
     inserted = 0
     
     with Session(engine) as session:
+        # 2. Extract job config
         job = session.query(Job).filter(Job.id == job_id).first()
         job_config = job.job_config if job else {}
         
+        # 3. Determine next version
         max_version_record = session.query(Hypothesis.version).filter(
             Hypothesis.job_id == job_id
         ).order_by(Hypothesis.version.desc()).first()
         next_version = (max_version_record[0] + 1) if max_version_record else 1
         
+        # 4. Cache existing active hypotheses to reuse expensive domain resolution
+        # Key: (source, target, tuple(path)) -> domain
+        # This prevents redundant LLM calls when "copying forward" unaffected rows.
+        existing_active = session.query(Hypothesis).filter(
+            Hypothesis.job_id == job_id,
+            Hypothesis.is_active == True,
+            Hypothesis.mode.in_(batch_modes)
+        ).all()
+        
+        domain_cache = {}
+        for row in existing_active:
+            key = (row.source, row.target, tuple(row.path or []))
+            domain_cache[key] = row.domain
+
+        # 5. Deactivate current active set for these modes
+        deactivate_hypotheses_for_job(job_id, modes=batch_modes)
+
+        # 6. Insert full snapshot
         for h in hypotheses:
-            # Domain Resolution: ONLY for new hypotheses
-            if "domain" not in h or h.get("domain") is None:
-                domain = resolve_domain(h, job_config, llm_client)
-            else:
-                domain = h.get("domain")
+            source = h.get("source")
+            target = h.get("target")
+            path = h.get("path", [])
+            key = (source, target, tuple(path))
             
-            # Store only the affected nodes this specific hypothesis touches (avoid redundancy)
-            path_nodes = set(h.get("path", []))
+            # Reuse domain if possible
+            domain = h.get("domain") or domain_cache.get(key)
+            if not domain:
+                domain = resolve_domain(h, job_config, llm_client)
+            
+            # Identify affected nodes in this specific hypothesis
+            path_nodes = set(path)
             hypothesis_affected = list(path_nodes & affected_nodes) if affected_nodes else None
             
             row = Hypothesis(
                 job_id=job_id,
-                source=h.get("source"),
-                target=h.get("target"),
-                path=h.get("path", []),
+                source=source,
+                target=target,
+                path=path,
                 predicates=h.get("predicates", []),
                 explanation=h.get("explanation", ""),
                 domain=domain,
