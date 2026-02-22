@@ -86,19 +86,19 @@ class FetchService:
         """
         Main entry point for the Fetch Stage (Universal Lead Orchestration).
         
-        Now supports both:
+        Harmonizes:
         1. Hypotheses (Machine Discovered)
         2. Vanguard Seeds (User Intent via SearchQuery status='new')
         """
         logger.info(f"FetchService: Starting fetch stage for Job {job_id}")
         
-        # 1. Load Configs
+        # 1. Load Thresholds from AdminPolicy (No Hardcoding)
         top_k = int(admin_policy.query_orchestrator.top_k_hypotheses)
         batch_size = int(admin_policy.query_orchestrator.fetch_batch_size)
         query_config = QueryOrchestratorConfig()
         
-        # 2. Harmonize Lead Selection (Hypotheses + Vanguard Seeds)
-        # 2a. Machine Leads
+        # 2. Harmonize Lead Selection
+        # 2a. Machine Leads (Grouped Diversity)
         from app.fetching.selection import select_top_diverse_leads
         machine_leads = select_top_diverse_leads(session, job_id, top_k, hypotheses)
         
@@ -117,26 +117,27 @@ class FetchService:
             return
 
         # 3. Load IDs for job-level dedup
-        from app.fetching.service import get_all_fetched_ids_for_job
+        from app.fetching.query_orchestrator import get_all_fetched_ids_for_job
         seen_ids = set(get_all_fetched_ids_for_job(job_id, session))
         
-        # 4. Harmonized Execution Loop
-        all_targets = []
+        # 4. Create Unified Target List
+        # Format: (origin_type, SearchQuery)
+        all_targets: List[Tuple[str, SearchQuery]] = []
         
-        # Handle Vanguard Seeds first (High Priority)
+        # Vanguard Seeds (Highest Priority)
         for v_query in vanguard_leads:
-            all_targets.append(("seed", v_query))
+            all_targets.append(("vanguard", v_query))
             
-        # Handle Machine Leads
+        # Machine Leads (Map to SearchQuery)
         for m_hypo in machine_leads:
-            # For machine leads, we still need to get/create the query object
-            # Note: We use the job's general focus_areas from config for these
+            # Get common focus areas from Job configuration
             job_obj = session.query(Job).get(job_id)
             focus_areas = []
             if job_obj and job_obj.job_config:
                 from app.config.job_config import JobConfig
-                cfg = JobConfig(**job_obj.job_config) if isinstance(job_obj.job_config, dict) else job_obj.job_config
-                focus_areas = cfg.query_config.focus_areas
+                if isinstance(job_obj.job_config, dict):
+                    cfg = JobConfig(**job_obj.job_config)
+                    focus_areas = cfg.query_config.focus_areas
             
             from app.fetching.query_orchestrator import get_or_create_search_query
             s_query = get_or_create_search_query(
@@ -146,35 +147,39 @@ class FetchService:
             )
             all_targets.append(("machine", s_query))
 
-        for lead_type, search_query in all_targets:
+        # 5. execute Unified Fetch
+        for origin, search_query in all_targets:
             try:
-                from app.fetching.query_orchestrator import should_run_query
+                from app.fetching.query_orchestrator import should_run_query, update_search_query_status
                 should_run, reason = should_run_query(search_query, session, config=query_config)
                 
                 if not should_run:
-                    logger.info(f"FetchService: Skipping query {search_query.id}: {reason}")
+                    logger.info(f"FetchService: Skipping {origin} lead {search_query.id}: {reason}")
                     continue
 
-                # 5. Fetch via domain-aware providers
+                logger.info(f"FetchService: Executing {origin} search for query {search_query.id}")
+
+                # 6. Fetch via domain-aware providers
                 candidates, provider_name = self.fetch_for_hypothesis(search_query, batch_size)
                 
+                # Update status (new -> reusable/exhausted) based on outcome
+                update_search_query_status(search_query, len(candidates), session)
+
                 if not candidates:
-                    logger.info(f"FetchService: No papers found for query {search_query.id}")
+                    logger.info(f"FetchService: No papers found for {origin} lead {search_query.id}")
                     continue
 
-                # 6. Global Deduplication and Persistence
+                # 7. Global Deduplication and Persistence
                 all_found_papers = self._deduplicate_and_persist(candidates, session)
                 
-                # 6. Job-level Deduplication
-                # We identify papers that are new TO THIS JOB.
-                # These might be newly persisted Papers OR existing ones from global DB.
+                # 8. Job-level Deduplication
                 job_new_papers = []
                 for paper in all_found_papers:
                     if paper.id not in seen_ids:
                         job_new_papers.append(paper)
                         seen_ids.add(paper.id)
 
-                # 7. Record SearchQueryRun (Log behavior)
+                # 9. Record SearchQueryRun (Log behavior)
                 search_run = record_search_run(
                     search_query=search_query,
                     job_id=job_id,
@@ -184,10 +189,8 @@ class FetchService:
                     config=query_config
                 )
                 
-                # 8. Update JobPaperEvidence (Strategic Ledger)
-                # We only add papers that are NEW to this job
+                # 10. Update JobPaperEvidence (Strategic Ledger)
                 from app.storage.models import JobPaperEvidence
-                
                 for paper in job_new_papers:
                      new_evidence = JobPaperEvidence(
                          job_id=job_id,
@@ -201,12 +204,11 @@ class FetchService:
                      )
                      session.add(new_evidence)
 
-                # 9. Create IngestionSources
-                # We must ingest papers that are new to this job so their abstracts/PDFs are processed
+                # 11. Create IngestionSources
                 self._create_ingestion_sources(job_id, job_new_papers, session)
 
             except Exception as e:
-                logger.error(f"FetchService: Error processing hypothesis {hypo.get('id')}: {e}", exc_info=True)
+                logger.error(f"FetchService: Error processing {origin} lead {search_query.id}: {e}", exc_info=True)
 
     def fetch_for_hypothesis(self, search_query: SearchQuery, limit: int) -> Tuple[List[Dict[str, Any]], str]:
         """Perform domain-aware provider routing."""

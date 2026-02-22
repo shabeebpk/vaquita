@@ -73,7 +73,7 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
         
         logger.info(f"Job {job_id} message {msg.id} classified as {classification.label.value}")
         
-        # 3. Finalize
+        # 3. Finalize and Route
         session.commit()
         
         publish_event({
@@ -83,6 +83,14 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
             "label": classification.label.value,
             "message_id": msg.id
         })
+
+        # 4. Trigger Next Stage
+        if classification.label == ClassificationLabel.RESEARCH_SEED:
+            logger.info(f"Classified as SEED; triggering fetch stage for job {job_id}")
+            fetch_stage.delay(job_id)
+        elif classification.label == ClassificationLabel.EVIDENCE_INPUT:
+            logger.info(f"Classified as EVIDENCE; triggering ingestion stage for job {job_id}")
+            ingest_stage.delay(job_id)
 
     return {"message_id": msg.id, "classification": classification.label.value}
 
@@ -710,10 +718,8 @@ def fetch_stage(self, job_id: int):
             return
 
     try:
-        graph = get_semantic_graph(job_id)
-        if not graph:
-            raise ValueError("Semantic graph missing for fetch")
-            
+        # For initial ignition (RESEARCH_SEED), the graph and hypotheses will be empty.
+        # This is expected behavior for the "Universal Fetch" model.
         hypotheses = get_hypotheses(job_id=job_id, limit=10000, offset=0) or []
 
         with Session(engine) as session:

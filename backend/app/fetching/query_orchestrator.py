@@ -253,9 +253,6 @@ def record_search_run(
         job_id: Job ID
         provider_used: Provider name ('arxiv', 'crossref', etc.)
         reason: Execution reason
-        fetched_paper_ids: List of all fetched paper IDs (job-unique)
-        accepted_paper_ids: List of accepted paper IDs
-        rejected_paper_ids: List of rejected paper IDs
         session: SQLAlchemy session
         config: QueryOrchestratorConfig (unused but accepted for API consistency)
     
@@ -280,3 +277,31 @@ def record_search_run(
     )
     
     return run
+
+
+def update_search_query_status(
+    search_query: SearchQuery,
+    papers_found_count: int,
+    session: Session
+):
+    """
+    Update SearchQuery status based on run results.
+    
+    Args:
+        search_query: SearchQuery model instance
+        papers_found_count: Number of papers found in the latest run
+        session: SQLAlchemy session
+    """
+    old_status = search_query.status
+    
+    if old_status == "new":
+        if papers_found_count > 0:
+            search_query.status = "reusable"
+        else:
+            search_query.status = "exhausted"
+    
+    # Note: Transition from 'reusable' to 'exhausted' or 'blocked' 
+    # is handled by the signal evaluator, not the fetcher.
+    
+    if old_status != search_query.status:
+        logger.info(f"SearchQuery {search_query.id} status updated: {old_status} -> {search_query.status}")
