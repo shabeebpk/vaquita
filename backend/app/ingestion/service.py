@@ -11,102 +11,46 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import asc
 
-from app.ingestion.normalizer import TextNormalizer
-from app.ingestion.segmenter import TextSegmenter
-from app.storage.models import Job, IngestionSource, TextBlock
+from app.storage.models import Job, IngestionSource, TextBlock, File
 from app.storage.db import engine
+from app.config.admin_policy import admin_policy
 
 logger = logging.getLogger(__name__)
 
 
 class IngestionService:
     """
-    Processes IngestionSource rows in a loop per job.
+    Precision Ingestion Service.
     
-    Workflow:
-    1. Query database for all unprocessed IngestionSource rows for a job
-    2. For each source (in creation order):
-       a. Read raw_text
-       b. Normalize in-memory (not stored separately)
-       c. Segment normalized text into blocks
-       d. Create TextBlock rows linked to the source
-       e. Mark source as processed = true
-    3. Repeat until no unprocessed sources remain
-    4. Set job status to INGESTED
-    
-    This design ensures idempotency and supports iterative expansion
-    (new sources added later trigger another ingestion pass).
+    Responsibility: Coordinate the 4-layer Ingestion Pipeline:
+    1. Adapter Layer (DLA/Physical Extraction)
+    2. Refinery Layer (LLM Text Cleaning)
+    3. Slicing Layer (Sentence-aware Blocking)
+    4. Storage Layer (Persistence)
     """
 
     @staticmethod
-    def ingest_job(
-        job_id: int,
-        segmentation_strategy: str = "sentences",
-        segmentation_kwargs: Optional[dict] = None,
-        normalization_kwargs: Optional[dict] = None,
-    ) -> dict:
+    def ingest_job(job_id: int) -> dict:
         """
-        Process all unprocessed IngestionSource rows for a job in a loop.
+        Process all unprocessed IngestionSource rows for a job.
         
-        Responsibility: Execute text processing only. Do not decide pipeline flow,
-        trigger other phases, or infer next actions. Caller (runner.py) controls
-        when this is invoked and what happens next.
-        
-        Args:
-            job_id: ID of the job to ingest
-            segmentation_strategy: 'sentences', 'paragraphs', 'length', 'sections'
-            segmentation_kwargs: strategy-specific parameters
-            normalization_kwargs: configuration for text normalization
-        
-        Returns:
-            dict with summary:
-                - job_id
-                - sources_processed: count of IngestionSource rows processed
-                - blocks_created: total TextBlock rows created
-        
-        Raises:
-            ValueError: if job not found
-            RuntimeError: if job status is not exactly READY_TO_INGEST
+        This method strictly uses the AdminPolicy for all configurations.
         """
-        if segmentation_kwargs is None:
-            segmentation_kwargs = {"sentences_per_block": 3}
-        if normalization_kwargs is None:
-            normalization_kwargs = {}
-
-        logger.info(f"Starting ingestion loop for job {job_id}")
+        logger.info(f"Starting Precision Ingestion loop for job {job_id}")
 
         with Session(engine) as session:
-            # Verify job exists and status is exactly READY_TO_INGEST (hard fail)
+            # Verify job exists and status is exactly READY_TO_INGEST
             job = session.query(Job).filter(Job.id == job_id).first()
             if not job:
                 raise ValueError(f"Job {job_id} not found")
             
             if job.status != "READY_TO_INGEST":
-                raise RuntimeError(
-                    f"Cannot ingest job {job_id}: status is '{job.status}', expected 'READY_TO_INGEST'. "
-                    "Caller must ensure job is in correct state before invoking ingestion."
-                )
-            
-            # Load defaults from AdminPolicy if not provided
-            from app.config.admin_policy import admin_policy
-            ing_defaults = admin_policy.algorithm.ingestion_defaults
-            
-            if segmentation_kwargs is None:
-                segmentation_kwargs = {
-                    "sentences_per_block": int(ing_defaults.sentences_per_block)
-                }
-            
-            if normalization_kwargs is None:
-                normalization_kwargs = {
-                    "apply_lexical_repair": bool(ing_defaults.enable_lexical_repair)
-                }
+                raise RuntimeError(f"Cannot ingest job {job_id}: status is '{job.status}', expected 'READY_TO_INGEST'.")
 
             sources_processed = 0
             blocks_created = 0
 
-            # Ingestion loop: process unprocessed sources in order
             while True:
-                # Query for the next unprocessed source (order by creation time)
                 unprocessed_source = (
                     session.query(IngestionSource)
                     .filter(
@@ -118,77 +62,81 @@ class IngestionService:
                 )
 
                 if not unprocessed_source:
-                    # No more unprocessed sources; ingestion is complete
-                    logger.info(f"No more unprocessed sources for job {job_id}")
                     break
 
-                logger.info(
-                    f"Processing IngestionSource {unprocessed_source.id} "
-                    f"(source_type={unprocessed_source.source_type}, "
-                    f"source_ref={unprocessed_source.source_ref})"
-                )
+                logger.info(f"IngestionService: Processing Source {unprocessed_source.id} ({unprocessed_source.source_type}).")
 
                 try:
-                    # Step 1: Normalize in-memory (no storage)
-                    normalized_text, extracted_urls = TextNormalizer.normalize(
-                        unprocessed_source.raw_text,
-                        **normalization_kwargs
-                    )
-                    logger.debug(
-                        f"Normalized {len(unprocessed_source.raw_text)} chars → "
-                        f"{len(normalized_text)} chars, "
-                        f"extracted {len(extracted_urls)} URLs"
-                    )
+                    # 1. Adapter Layer: Physical Extraction / DLA
+                    from app.ingestion.adapters.factory import get_adapter_for_source
+                    adapter = get_adapter_for_source(unprocessed_source.source_type, unprocessed_source.source_ref)
+                    
+                    # Decide input for adapter (Resolve file path or use raw text)
+                    if "file:" in unprocessed_source.source_ref:
+                        file_id_str = unprocessed_source.source_ref.replace("file:", "")
+                        file_row = session.query(File).filter(File.id == int(file_id_str)).first()
+                        if not file_row:
+                            raise FileNotFoundError(f"Source {unprocessed_source.id} references missing file {file_id_str}.")
+                        input_data = file_row.stored_path
+                    else:
+                        # For 'paper:ID' or 'user_text_...', we use the pre-extracted raw_text
+                        input_data = unprocessed_source.raw_text or ""
 
-                    # Step 2: Segment normalized text into blocks
-                    blocks = IngestionService._segment_text(
-                        normalized_text,
-                        segmentation_strategy,
-                        **segmentation_kwargs
-                    )
-                    logger.info(
-                        f"Segmented into {len(blocks)} blocks using '{segmentation_strategy}'"
-                    )
+                    regions = adapter.extract_regions(input_data, admin_policy.algorithm.extraction)
+                    
+                    # 2. Refinery Layer: LLM Polishing (Conditional)
+                    refinery_config = admin_policy.algorithm.refinery
+                    should_refine = unprocessed_source.source_type in refinery_config.needs_refinement_types
+                    
+                    refined_parts = []
+                    if should_refine:
+                        from app.ingestion.refinery.service import TextRefineryService
+                        refinery = TextRefineryService()
+                        for reg in regions:
+                            word_count = len(reg.text.split())
+                            logger.info(f"IngestionService: Refining gathered {reg.region_type} region ({word_count} words).")
+                            logger.info(f"IngestionService: RAW CONTENT: {reg.text[:500]}...")
+                            
+                            clean_text = refinery.refine_text(reg.text)
+                            if clean_text:
+                                logger.info(f"IngestionService: CLEAN CONTENT: {clean_text[:500]}...")
+                                refined_parts.append(clean_text)
+                            else:
+                                logger.warning(f"IngestionService: Refinery rejected {reg.region_type} span (Noise?).")
+                    else:
+                        logger.info(f"IngestionService: Skipping refinement for clean source type: {unprocessed_source.source_type}.")
+                        refined_parts = [reg.text for reg in regions]
+                    
+                    full_text = "\n\n".join(refined_parts)
 
-                    # Step 3: Create TextBlock rows with provenance
-                    for block_index, block_text in enumerate(blocks, 1):
-                        text_block = TextBlock(
+                    # 3. Slicing Layer: Sentence Integrity
+                    from app.ingestion.slicing.service import SentenceSlicingService
+                    slicer = SentenceSlicingService()
+                    blocks = slicer.slice_text(full_text)
+
+                    # 4. Storage Layer: Persistence
+                    for idx, b_text in enumerate(blocks, 1):
+                        block = TextBlock(
                             job_id=job_id,
                             ingestion_source_id=unprocessed_source.id,
-                            block_text=block_text,
-                            block_order=block_index,
+                            block_text=b_text,
+                            block_order=idx,
                             block_type="text_block",
-                            segmentation_strategy=segmentation_strategy,
+                            segmentation_strategy=admin_policy.algorithm.slicing.strategy,
                             triples_extracted=False
                         )
-                        session.add(text_block)
+                        session.add(block)
                         blocks_created += 1
 
-                    # Step 4: Mark source as processed and commit immediately
                     unprocessed_source.processed = True
                     session.add(unprocessed_source)
                     session.commit()
                     sources_processed += 1
 
-                    logger.info(
-                        f"IngestionSource {unprocessed_source.id} processed: "
-                        f"{len(blocks)} blocks created and committed"
-                    )
-
                 except Exception as e:
-                    logger.error(
-                        f"Failed to process IngestionSource {unprocessed_source.id}: {str(e)}",
-                        exc_info=True
-                    )
+                    logger.error(f"IngestionService: Source {unprocessed_source.id} failed: {e}.", exc_info=True)
                     session.rollback()
-                    # Continue to next source rather than crashing
                     continue
-
-            # Ingestion complete. Caller (runner.py) decides next status and phase.
-            logger.info(
-                f"Ingestion complete for job {job_id}: "
-                f"{sources_processed} sources processed, {blocks_created} blocks created"
-            )
 
             return {
                 "job_id": job_id,
@@ -197,57 +145,8 @@ class IngestionService:
             }
 
     @staticmethod
-    def _segment_text(
-        text: str,
-        strategy: str = "sentences",
-        **kwargs
-    ) -> list:
-        """
-        Delegate to TextSegmenter based on strategy.
-        
-        Args:
-            text: normalized text
-            strategy: 'sentences', 'paragraphs', 'length', 'sections'
-            **kwargs: strategy-specific parameters
-        
-        Returns:
-            list of text blocks
-        
-        Raises:
-            ValueError: if strategy not supported
-        """
-        if strategy == "sentences":
-            return TextSegmenter.segment_by_sentences(
-                text,
-                sentences_per_block=kwargs.get("sentences_per_block", 3)
-            )
-        elif strategy == "paragraphs":
-            return TextSegmenter.segment_by_paragraphs(
-                text,
-                min_para_length=kwargs.get("min_para_length", 50)
-            )
-        elif strategy == "length":
-            return TextSegmenter.segment_by_length(
-                text,
-                block_length=kwargs.get("block_length", 300),
-                overlap=kwargs.get("overlap", 50)
-            )
-        elif strategy == "sections":
-            return TextSegmenter.segment_by_sections(
-                text,
-                section_markers=kwargs.get("section_markers", None)
-            )
-        else:
-            raise ValueError(f"Unknown segmentation strategy: {strategy}")
-
-    @staticmethod
     def get_blocks_for_job(job_id: int) -> list:
-        """
-        Retrieve all TextBlock rows for a job.
-        
-        Returns:
-            list of dicts with keys: id, block_text, block_order, block_type, source_id
-        """
+        """Retrieve all TextBlock rows for a job."""
         with Session(engine) as session:
             blocks = session.query(TextBlock).filter(
                 TextBlock.job_id == job_id
@@ -258,7 +157,6 @@ class IngestionService:
                     "id": b.id,
                     "block_text": b.block_text,
                     "block_order": b.block_order,
-                    "block_type": b.block_type,
                     "ingestion_source_id": b.ingestion_source_id
                 }
                 for b in blocks

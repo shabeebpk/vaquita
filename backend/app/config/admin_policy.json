@@ -48,10 +48,41 @@
                 "filtered_to_total_ratio": 0.5
             }
         },
-        "ingestion_defaults": {
-            "segmentation_strategy": "sentences",
-            "sentences_per_block": 1,
-            "enable_lexical_repair": false
+        "extraction": {
+            "whitelisted_regions": [
+                "abstract",
+                "introduction",
+                "conclusion",
+                "results",
+                "methods"
+            ],
+            "excluded_regions": [
+                "references",
+                "bibliography",
+                "acknowledgments",
+                "appendix",
+                "author_contributions"
+            ],
+            "enable_zonal_slicing": true,
+            "fallback_to_full_text": true,
+            "column_width_threshold": 200
+        },
+        "refinery": {
+            "model": "nvidia/llama3-chatqa-1.5-8b",
+            "prompt_asset": "text_refinery.txt",
+            "temperature": 0.0,
+            "max_tokens_per_span": 1000,
+            "enable_recovery": true,
+            "needs_refinement_types": [
+                "pdf_text",
+                "user_text"
+            ]
+        },
+        "slicing": {
+            "strategy": "block",
+            "sentences_per_block": 4,
+            "max_tokens_per_block": 250,
+            "overlap_sentences": 0
         },
         "deduplication_defaults": {
             "algorithm": "sha256",

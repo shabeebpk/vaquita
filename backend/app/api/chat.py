@@ -21,7 +21,7 @@ router = APIRouter()
 async def unified_chat(
     job_id: Optional[Union[int, str]] = Form(None),
     content: Optional[str] = Form(None),
-    files: Optional[Any] = File(None)
+    files: Optional[List[UploadFile]] = File(None)
 ):
     """
     Unified Endpoint for Literature Review.
@@ -58,13 +58,11 @@ async def unified_chat(
             if not job:
                 raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-        # 3. Sanitize files (Filter out placeholders like "string")
+        # 3. Handle multiple file uploads
         actual_files = []
         if files:
-            # Ensure it's a list for iteration
-            file_list = files if isinstance(files, list) else [files]
-            for f in file_list:
-                if isinstance(f, UploadFile) and f.filename and f.filename != "string":
+            for f in files:
+                if f.filename and f.filename != "string":
                     actual_files.append(f)
         files = actual_files
 

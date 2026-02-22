@@ -19,6 +19,6 @@ class BaseLLMProvider(ABC):
         self.config = kwargs
 
     @abstractmethod
-    def generate(self, prompt: str) -> str:
-        """Generate text from a prompt. Must raise exception on failure."""
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text from a prompt. Accepts runtime overrides in **kwargs."""
         pass

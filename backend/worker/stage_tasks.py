@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from celery_app import celery_app
 from celery.exceptions import MaxRetriesExceededError
 
+from app.storage.models import Job, File, IngestionSource, IngestionSourceType, ConversationMessage, MessageRole, MessageType, DecisionResult
 from app.storage.db import engine
-from app.storage.models import Job, IngestionSource, IngestionSourceType, DecisionResult, ConversationMessage, MessageRole, MessageType
 from app.config.job_config import JobConfig
 from events import publish_event
 
@@ -36,8 +36,7 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
 
 # Configs (mirrored from runner.py)
 from app.config.admin_policy import admin_policy
-_INGESTION_SEGMENTATION_STRATEGY = admin_policy.algorithm.ingestion_defaults.segmentation_strategy
-_INGESTION_SENTENCES_PER_BLOCK = admin_policy.algorithm.ingestion_defaults.sentences_per_block
+# Legacy extraction constants removed
 _SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.decision_thresholds.semantic_similarity_threshold
 _PATH_REASONING_MAX_HOPS = admin_policy.algorithm.path_reasoning_defaults.max_hops
 
@@ -108,7 +107,6 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
 def extract_stage(self, job_id: int, file_id: int):
     """Extraction of text from a single File and saves it as an IngestionSource."""
     from app.storage.models import File, IngestionSource, IngestionSourceType
-    from app.ingestion.extractor import extract_text_from_file
     
     publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "started"})
     
@@ -119,27 +117,22 @@ def extract_stage(self, job_id: int, file_id: int):
             return
             
         try:
-            # 1. Perform extraction (reusing centralized logic)
-            text = extract_text_from_file(file_row.stored_path, file_row.file_type)
+            # New Precision Flow: We don't extract raw text here.
+            # We just create an IngestionSource pointing to the file.
+            # The IngestionService will run the layout-aware DLA later.
             
-            if not text or not text.strip():
-                logger.warning(f"No text extracted from file {file_id}")
-                publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "empty_content"})
-                return
-            
-            # 2. Create IngestionSource
             source = IngestionSource(
                 job_id=job_id,
-                source_type=IngestionSourceType.PDF_TEXT.value,
+                source_type=IngestionSourceType.PDF_TEXT.value if file_row.file_type == "pdf" else IngestionSourceType.API_TEXT.value,
                 source_ref=f"file:{file_id}",
-                raw_text=text,
+                raw_text="", # Will be populated via Precision Extraction in Ingest stage
                 processed=False
             )
             session.add(source)
             session.commit()
             
-            publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "completed"})
-            logger.info(f"Extraction completed for file {file_id}")
+            publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "registered"})
+            logger.info(f"File {file_id} registered for precision ingestion.")
             return True
             
         except Exception as e:
@@ -191,11 +184,7 @@ def ingest_stage(self, job_id: int):
             return
 
     try:
-        IngestionService.ingest_job(
-            job_id=job_id,
-            segmentation_strategy=_INGESTION_SEGMENTATION_STRATEGY,
-            segmentation_kwargs={"sentences_per_block": _INGESTION_SENTENCES_PER_BLOCK}
-        )
+        IngestionService.ingest_job(job_id=job_id)
         
         with Session(engine) as session:
             job = session.query(Job).get(job_id)

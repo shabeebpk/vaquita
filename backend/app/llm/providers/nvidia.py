@@ -26,13 +26,20 @@ class NvidiaProvider(BaseLLMProvider):
             logger.error(f"Failed to initialize OpenAI client for Nvidia: {e}")
             raise
 
-    def generate(self, prompt: str) -> str:
-        """Generate text using NVIDIA API. Raises on failure."""
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text using NVIDIA API. Supports runtime overrides."""
+        # Use runtime kwargs, then instance config, then defaults
+        max_tokens = kwargs.get("max_tokens") or self.max_tokens
+        # NVIDIA API hard limit for llama-chatqa is often 1024
+        max_tokens = min(max_tokens, 1024) 
+        temperature = kwargs.get("temperature", 0.0)
+        
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=self.max_tokens
+                max_tokens=max_tokens,
+                temperature=temperature
             )
             content = resp.choices[0].message.content
             if not content:

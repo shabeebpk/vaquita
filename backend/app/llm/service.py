@@ -84,8 +84,8 @@ class LLMService:
         # Instantiate from the registry class
         return provider_cls(credentials=credentials, **common_kwargs)
 
-    def generate(self, prompt: str) -> str:
-        """Generate text using the global fallback loop."""
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text using the global fallback loop. Accepts runtime overrides."""
         if not prompt or not isinstance(prompt, str):
             logger.warning("generate() called with invalid prompt.")
             return ""
@@ -97,8 +97,8 @@ class LLMService:
                 continue
                 
             try:
-                logger.info(f"LLM Attempt: {provider_id}")
-                result = provider.generate(prompt)
+                logger.info(f"LLM Attempt: {provider_id} with custom overrides: {list(kwargs.keys())}.")
+                result = provider.generate(prompt, **kwargs)
                 
                 if result and result.strip():
                     return result

@@ -17,7 +17,7 @@ AdminPolicy is NEVER stored in the database or copied to jobs.
 import os
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
@@ -87,11 +87,29 @@ class SignalParams(BaseModel):
     max_deltas: SignalMaxDeltas = Field(default_factory=SignalMaxDeltas)
 
 
-class IngestionDefaults(BaseModel):
-    """Ingestion default parameters."""
-    segmentation_strategy: str = "sentences"
-    sentences_per_block: int = 3
-    enable_lexical_repair: bool = False
+class ExtractionConfig(BaseModel):
+    """Configuration for physical layout analysis (DLA)."""
+    whitelisted_regions: List[str] = ["abstract", "introduction", "body", "conclusion", "results", "methods"]
+    excluded_regions: List[str] = ["references", "bibliography", "acknowledgments", "appendix", "author_contributions"]
+    enable_zonal_slicing: bool = True
+    fallback_to_full_text: bool = True
+    column_width_threshold: int = 200
+
+class RefineryConfig(BaseModel):
+    """Configuration for LLM-based text cleaning."""
+    model: str = "nvidia/llama3-chatqa-1.5-8b"
+    prompt_asset: str = "text_refinery.txt"
+    temperature: float = 0.0
+    max_tokens_per_span: int = 1000
+    enable_recovery: bool = True
+    needs_refinement_types: List[str] = ["pdf_text", "user_text"]
+
+class SlicingConfig(BaseModel):
+    """Configuration for rule-based sentence slicing."""
+    strategy: str = "block"
+    sentences_per_block: int = 4
+    max_tokens_per_block: int = 250
+    overlap_sentences: int = 0
 
 
 class DeduplicationDefaults(BaseModel):
@@ -124,11 +142,21 @@ class IndirectPath(BaseModel):
     max_length: int = 4
 
 
+class TripleExtractionConfig(BaseModel):
+    """Configuration for Triple Extraction stage."""
+    format: str = "line"  # "json" or "line"
+    delimiter: str = "|"
+    model: Optional[str] = None
+    max_tokens: int = 1000
+
 class Algorithm(BaseModel):
-    """Algorithm-level parameters."""
+    """Algorithm-related configurations."""
     decision_thresholds: DecisionThresholds = Field(default_factory=DecisionThresholds)
     signal_params: SignalParams = Field(default_factory=SignalParams)
-    ingestion_defaults: IngestionDefaults = Field(default_factory=IngestionDefaults)
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    refinery: RefineryConfig = Field(default_factory=RefineryConfig)
+    slicing: SlicingConfig = Field(default_factory=SlicingConfig)
+    triple_extraction: TripleExtractionConfig = Field(default_factory=TripleExtractionConfig)
     deduplication_defaults: DeduplicationDefaults = Field(default_factory=DeduplicationDefaults)
     path_reasoning_defaults: PathReasoningDefaults = Field(default_factory=PathReasoningDefaults)
     domain_resolution: DomainResolution = Field(default_factory=DomainResolution)

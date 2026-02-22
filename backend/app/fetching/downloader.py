@@ -18,7 +18,6 @@ from app.storage.models import (
     Job, Paper, File, IngestionSource, 
     JobPaperEvidence, IngestionSourceType
 )
-from app.ingestion.extractor import extract_text_from_file
 from app.config.admin_policy import admin_policy
 
 logger = logging.getLogger(__name__)
@@ -104,13 +103,6 @@ class PaperDownloader:
             if not download_success:
                 return False
 
-            # Extract text
-            try:
-                raw_text = extract_text_from_file(str(file_path), "pdf")
-            except Exception as e:
-                logger.error(f"Text extraction failed for {file_path}: {e}")
-                raw_text = "" # Fallback to empty if extraction fails but download succeeded
-
             # Register File record
             file_record = File(
                 job_id=job_id,
@@ -128,7 +120,7 @@ class PaperDownloader:
                 job_id=job_id,
                 source_type=IngestionSourceType.PDF_TEXT.value,
                 source_ref=f"file:{file_record.id}",
-                raw_text=raw_text,
+                raw_text="",
                 processed=False
             )
             session.add(source)
