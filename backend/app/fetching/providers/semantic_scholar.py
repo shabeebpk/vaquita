@@ -28,9 +28,15 @@ class SemanticScholarProvider(BaseFetchProvider):
 
     
     def _wait_for_rate_limit(self):
-        """Rate limiting: 2 seconds between requests for free tier stability."""
+        """Rate limiting: apply configured wait time between requests."""
+        from app.config.admin_policy import admin_policy
+        
+        wait_time = 2.0  # default
+        provider_policy = admin_policy.fetch_apis.providers.get("semantic_scholar")
+        if provider_policy:
+            wait_time = provider_policy.rate_limit_wait_seconds
+        
         elapsed = time.time() - self._last_call_time
-        wait_time = 2.0  # Increased for free tier
         if elapsed < wait_time:
             logger.debug(f"SemanticScholarProvider: rate limiting, sleeping {wait_time - elapsed:.2f}s")
             time.sleep(wait_time - elapsed)

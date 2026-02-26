@@ -9,6 +9,7 @@ from typing import Any, Optional
 import redis
 
 from app.config.system_settings import system_settings
+from app.config.admin_policy import admin_policy
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +25,18 @@ except Exception as e:
     _redis_client = None
     _local_fallback = {}
 
-CACHE_PREFIX = "structural_graph:"
-DEFAULT_TTL = 3600  # 1 hour
+# Load config from admin_policy
+_CACHE_PREFIX = admin_policy.caching.redis.prefix
+_DEFAULT_TTL = admin_policy.caching.redis.ttl_seconds
 
 def set_structural_graph(job_id: int, value: Any) -> None:
     """Store the structural graph in Redis with a TTL."""
-    key = f"{CACHE_PREFIX}{job_id}"
+    key = f"{_CACHE_PREFIX}{job_id}"
     try:
         if _redis_client:
             # Serialize to JSON for Redis storage
             serialized = json.dumps(value)
-            _redis_client.set(key, serialized, ex=DEFAULT_TTL)
+            _redis_client.set(key, serialized, ex=_DEFAULT_TTL)
             logger.debug(f"Stored structural graph in Redis for job {job_id}")
         else:
             _local_fallback[int(job_id)] = value
@@ -43,7 +45,7 @@ def set_structural_graph(job_id: int, value: Any) -> None:
 
 def get_structural_graph(job_id: int) -> Optional[Any]:
     """Retrieve the structural graph from Redis."""
-    key = f"{CACHE_PREFIX}{job_id}"
+    key = f"{_CACHE_PREFIX}{job_id}"
     try:
         if _redis_client:
             data = _redis_client.get(key)
@@ -58,7 +60,7 @@ def get_structural_graph(job_id: int) -> Optional[Any]:
 
 def delete_structural_graph(job_id: int) -> None:
     """Delete the structural graph from Redis."""
-    key = f"{CACHE_PREFIX}{job_id}"
+    key = f"{_CACHE_PREFIX}{job_id}"
     try:
         if _redis_client:
             _redis_client.delete(key)

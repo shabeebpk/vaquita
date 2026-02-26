@@ -2,9 +2,9 @@ services:
   api:
     build:
       context: ../backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
       - ../backend:/app
       - /data/literature_uploads:/app/uploads
@@ -37,15 +37,11 @@ services:
   postgres:
     image: postgres:16
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5433}:5432"
     environment:
       POSTGRES_DB: literature_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
   redis:
     image: redis:7
 

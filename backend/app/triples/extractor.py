@@ -72,7 +72,14 @@ class TripleExtractor:
         parts = line.split("|")
         if len(parts) != 3:
             return None
-        subject, predicate, obj = (p.strip() for p in parts)
+
+        def _strip_matching_quotes(s: str) -> str:
+            s = s.strip()
+            if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+                return s[1:-1]
+            return s
+
+        subject, predicate, obj = (_strip_matching_quotes(p) for p in parts)
         if not subject or not predicate or not obj:
             return None
         # Reject obviously hallucinated / broken values

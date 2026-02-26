@@ -92,7 +92,7 @@ class ExtractionConfig(BaseModel):
     whitelisted_regions: List[str] = ["abstract", "introduction", "body", "conclusion", "results", "methods"]
     excluded_regions: List[str] = ["references", "bibliography", "acknowledgments", "appendix", "author_contributions"]
     enable_zonal_slicing: bool = True
-    fallback_to_full_text: bool = True
+    fallback_max_tokens: int = 1500  # Max tokens to extract if no whitelisted regions found (page-progressive)
     column_width_threshold: int = 200
 
 class RefineryConfig(BaseModel):
@@ -147,6 +147,16 @@ class IndirectPath(BaseModel):
     max_length: int = 4
 
 
+class GraphMergingConfig(BaseModel):
+    """Graph merging and semantic similarity parameters."""
+    similarity_threshold: float = 0.85
+    """Cosine similarity threshold for merging concept nodes."""
+    min_node_text_length: int = 2
+    """Minimum text length to consider a node for merging."""
+    linkage: str = "average"
+    """Clustering linkage method: 'average', 'complete', 'single'."""
+
+
 class TripleExtractionConfig(BaseModel):
     """Configuration for Triple Extraction stage."""
     format: str = "line"  # "json" or "line"
@@ -158,6 +168,39 @@ class DownloaderConfig(BaseModel):
     """Configuration for strategic paper downloading."""
     batch_size: int = 1
     """Number of papers to download and ingest per cycle for 'Evenly Cooked' growth."""
+
+
+class SentenceTransformerConfig(BaseModel):
+    """Sentence Transformers embedding model configuration."""
+    model_name: str = "all-MiniLM-L6-v2"
+    """HuggingFace model identifier."""
+    batch_size: int = 32
+    """Batch size for encoding texts."""
+    device: str = "cpu"
+    """Device: 'cpu' or 'cuda'."""
+
+
+class EmbeddingsConfig(BaseModel):
+    """Embeddings and feature extraction configuration."""
+    default_provider: str = "sentence_transformers"
+    """Default embedding provider name."""
+    sentence_transformers: SentenceTransformerConfig = Field(default_factory=SentenceTransformerConfig)
+    """Sentence Transformers configuration."""
+
+
+class RedisConfig(BaseModel):
+    """Redis caching configuration."""
+    ttl_seconds: int = 3600
+    """Time-to-live for cached items in seconds (default 1 hour)."""
+    prefix: str = "structural_graph:"
+    """Redis key prefix for cached structural graphs."""
+
+
+class CachingConfig(BaseModel):
+    """Caching configuration."""
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    """Redis caching settings."""
+
 
 class Algorithm(BaseModel):
     """Algorithm-related configurations."""
@@ -171,6 +214,7 @@ class Algorithm(BaseModel):
     path_reasoning_defaults: PathReasoningDefaults = Field(default_factory=PathReasoningDefaults)
     domain_resolution: DomainResolution = Field(default_factory=DomainResolution)
     indirect_path: IndirectPath = Field(default_factory=IndirectPath)
+    graph_merging: GraphMergingConfig = Field(default_factory=GraphMergingConfig)
 
 
 class FetchParams(BaseModel):
@@ -182,6 +226,8 @@ class FetchParams(BaseModel):
 class FetchProviderPolicy(BaseModel):
     """Policy for a single Fetch provider."""
     active: bool = True
+    rate_limit_wait_seconds: float = 2.0
+    """Wait time (seconds) between requests for rate limit compliance."""
 
 class FetchAPIPolicy(BaseModel):
     """Configuration for fetch providers and their domain-specific priority."""
@@ -236,6 +282,8 @@ class AdminPolicy(BaseModel):
     """Root AdminPolicy model."""
     llm: LLMPolicy = Field(default_factory=LLMPolicy)
     algorithm: Algorithm = Field(default_factory=Algorithm)
+    embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
+    caching: CachingConfig = Field(default_factory=CachingConfig)
     query_orchestrator: QueryOrchestrator = Field(default_factory=QueryOrchestrator)
     fetch_apis: FetchAPIPolicy = Field(default_factory=FetchAPIPolicy)
     prompt_assets: PromptAssets = Field(default_factory=PromptAssets)

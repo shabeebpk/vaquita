@@ -64,7 +64,7 @@
                 "author_contributions"
             ],
             "enable_zonal_slicing": true,
-            "fallback_to_full_text": true,
+            "fallback_max_tokens": 1500,
             "column_width_threshold": 200
         },
         "refinery": {
@@ -118,6 +118,25 @@
             "dominance_gap_threshold": 0.2,
             "min_length": 3,
             "max_length": 4
+        },
+        "graph_merging": {
+            "similarity_threshold": 0.85,
+            "min_node_text_length": 2,
+            "linkage": "average"
+        }
+    },
+    "embeddings": {
+        "default_provider": "sentence_transformers",
+        "sentence_transformers": {
+            "model_name": "all-MiniLM-L6-v2",
+            "batch_size": 32,
+            "device": "cpu"
+        }
+    },
+    "caching": {
+        "redis": {
+            "ttl_seconds": 3600,
+            "prefix": "structural_graph:"
         }
     },
     "query_orchestrator": {
@@ -137,7 +156,8 @@
     "fetch_apis": {
         "providers": {
             "semantic_scholar": {
-                "active": true
+                "active": true,
+                "rate_limit_wait_seconds": 2.0
             }
         },
         "domain_provider_order": {

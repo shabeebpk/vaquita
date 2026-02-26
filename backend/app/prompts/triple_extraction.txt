@@ -11,7 +11,7 @@ You are an expert at converting scientific text into simple factual triples (sub
 ### Formatting Rules:
 - Return ONLY triples, one per line.
 - Format: subject | predicate | object
-- **No Quotes**: Do not wrap subjects, predicates, or objects in quotes (e.g., use inception-v3, not "inception-v3").
+- No Quotes: Do not wrap subjects, predicates, or objects in quotes (e.g., use inception-v3, not "inception-v3").
 - Case: Lowercase everything.
 - Acronyms: Expand them to their full form (e.g. "cnn" to "convolutional neural network").
 - Length: Keep each part concise (1-5 words).

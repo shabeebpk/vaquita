@@ -30,14 +30,18 @@ def _embed_texts(provider, texts: List[str]) -> np.ndarray:
 def incremental_merge_semantically(
     job_id: int,
     sanitized_graph: Dict,
-    embedding_provider_name: str = "sentence-transformers",
-    similarity_threshold: float = 0.85,
+    embedding_provider_name: str = "sentence_transformers",
+    similarity_threshold: float = None,
     **embedding_kwargs,
 ) -> Dict:
     """Incrementally merge `sanitized_graph` into existing semantic graph for `job_id`.
 
     Returns merged semantic graph dict.
     """
+    # Load similarity_threshold from admin_policy if not provided
+    if similarity_threshold is None:
+        from app.config.admin_policy import admin_policy
+        similarity_threshold = admin_policy.algorithm.graph_merging.similarity_threshold
     # Load existing semantic graph
     existing = get_semantic_graph(job_id)
     if not existing:

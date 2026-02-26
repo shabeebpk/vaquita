@@ -37,8 +37,9 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
 # Configs (mirrored from runner.py)
 from app.config.admin_policy import admin_policy
 # Legacy extraction constants removed
-_SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.decision_thresholds.semantic_similarity_threshold
+_SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.graph_merging.similarity_threshold
 _PATH_REASONING_MAX_HOPS = admin_policy.algorithm.path_reasoning_defaults.max_hops
+_MIN_NODE_TEXT_LENGTH = admin_policy.algorithm.graph_merging.min_node_text_length
 
 # Stage -1: Classification and Routing
 # ============================================================================
@@ -369,7 +370,7 @@ def semantic_merging_stage(self, job_id: int):
         semantic_graph = incremental_merge_semantically(
             job_id,
             cached,
-            embedding_provider_name="sentence-transformers",
+            embedding_provider_name="sentence_transformers",
             similarity_threshold=_SEMANTIC_SIMILARITY_THRESHOLD,
         )
         

@@ -15,7 +15,15 @@ class BaseExtractionAdapter(ABC):
     Abstract contract for Layout-Aware Extractor Adapters.
     
     Responsibility: Take a raw file, analyze its physical layout, 
-    and return structured regions of text.
+    and return structured regions of text. Adapters NEVER write back to the database;
+    they only return region objects. The ingestion service is responsible for:
+    - Optionally refining region text via the refinery layer
+    - Concatenating all regions
+    - Writing the final concatenated text to IngestionSource.raw_text (canonical storage)
+    - Slicing that raw_text into blocks
+    
+    Contract enforcement: All extracted text MUST flow through IngestionSource.raw_text
+    before slicing occurs. No adapter or caller may bypass this column.
     """
 
     @abstractmethod
@@ -24,11 +32,13 @@ class BaseExtractionAdapter(ABC):
         Analyze layout and return whitelisted regions.
         
         Args:
-            file_path: Absolute path to local file.
+            file_path: Absolute path to local file (or text string for text adapters).
             config: AdminPolicy.algorithm.extraction config object.
             
         Returns:
             List of ExtractionRegion objects sorted by logical reading order.
+            The ingestion service will concatenate these regions, optionally refine,
+            and write the result to IngestionSource.raw_text before slicing.
         """
         pass
 

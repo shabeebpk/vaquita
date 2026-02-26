@@ -29,7 +29,11 @@ class PDFAdapter(BaseExtractionAdapter):
     3. Accumulate all text under that heading into one stream.
     4. When a NEW heading is found, flush the old stream IF it is whitelisted.
     5. Stop completely when an excluded heading (references, bibliography) is found.
-    6. Return only whitelisted region streams to the refinery.
+    6. Return only whitelisted region streams to the ingestion service.
+    
+    Contract: This adapter returns ExtractionRegion objects only; it does NOT write to
+    IngestionSource.raw_text. The ingestion service is responsible for concatenating
+    regions, refining, and storing the final text to raw_text before slicing.
     """
 
     SUPPORTED_EXTENSIONS = ["pdf"]
@@ -102,10 +106,11 @@ class PDFAdapter(BaseExtractionAdapter):
             if not is_pruned:
                 self._flush(region_buffer, current_region, whitelisted, all_regions, page_num if 'page_num' in dir() else 1)
 
-            if not all_regions and config.fallback_to_full_text:
-                logger.warning("PDFAdapter: No whitelisted regions found. Falling back to full text.")
-                full_text = "\n".join([p.get_text() for p in doc])
-                all_regions.append(ExtractionRegion(full_text, "full_fallback", 1))
+            if not all_regions and config.fallback_max_tokens > 0:
+                logger.warning(f"PDFAdapter: No whitelisted regions found. Extracting up to {config.fallback_max_tokens} tokens via page-progressive fallback.")
+                fallback_text = self._extract_fallback_progressive(doc, config.fallback_max_tokens)
+                if fallback_text.strip():
+                    all_regions.append(ExtractionRegion(fallback_text, "fallback_progressive", 1))
 
         finally:
             doc.close()
@@ -125,3 +130,31 @@ class PDFAdapter(BaseExtractionAdapter):
         if full_text:
             output.append(ExtractionRegion(full_text, region, page_num))
             logger.info(f"PDFAdapter: Flushed whitelisted region '{region}' — {len(full_text)} chars.")
+
+    def _extract_fallback_progressive(self, doc, max_tokens: int) -> str:
+        """
+        Extract pages progressively until token limit is reached.
+        Approximate tokens as chars / 3.5.
+        """
+        CHARS_PER_TOKEN = 3.5
+        max_chars = max_tokens * CHARS_PER_TOKEN
+        accumulated_text = []
+        accumulated_chars = 0
+        
+        for page_num, page in enumerate(doc, 1):
+            page_text = page.get_text().strip()
+            if not page_text:
+                continue
+            
+            page_chars = len(page_text)
+            
+            # Stop if adding this page would exceed limit
+            if accumulated_chars + page_chars > max_chars:
+                logger.info(f"PDFAdapter: Token limit reached after page {page_num}. Stopping fallback extraction.")
+                break
+            
+            accumulated_text.append(page_text)
+            accumulated_chars += page_chars
+            logger.info(f"PDFAdapter: Fallback extracted page {page_num} ({page_chars} chars, cumulative {accumulated_chars}/{max_chars}).")
+        
+        return "\n\n".join(accumulated_text)

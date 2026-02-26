@@ -11,6 +11,10 @@ class SimpleTextAdapter(BaseExtractionAdapter):
     
     Responsibility: Take raw text or a .txt file, and return it as a single body region.
     No DLA needed as these formats lack physical layout coordinates.
+    
+    Contract: This adapter returns ExtractionRegion objects only; it does NOT write to
+    IngestionSource.raw_text. The ingestion service is responsible for concatenating
+    regions, refining, and storing the final text to raw_text before slicing.
     """
 
     SUPPORTED_EXTENSIONS = ["txt"]

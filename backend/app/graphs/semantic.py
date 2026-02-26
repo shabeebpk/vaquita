@@ -14,6 +14,7 @@ from sklearn.cluster import AgglomerativeClustering
 
 from app.embeddings.factory import get_embedding_provider
 from app.embeddings.interface import EmbeddingProvider
+from app.config.admin_policy import admin_policy
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ def _filter_concept_nodes(sanitized_graph: Dict) -> Tuple[List[Dict], Dict[str, 
     nodes = sanitized_graph.get("nodes", [])
     concept_nodes = []
     node_to_idx = {}
+    
+    min_text_length = admin_policy.algorithm.graph_merging.min_node_text_length
 
     for node in nodes:
         if not isinstance(node, dict):
@@ -40,7 +43,7 @@ def _filter_concept_nodes(sanitized_graph: Dict) -> Tuple[List[Dict], Dict[str, 
             continue
 
         # Skip very short or malformed nodes
-        if not node_text or len(node_text.strip()) < 2:
+        if not node_text or len(node_text.strip()) < min_text_length:
             continue
 
         # Skip if already suspicious (pure numbers, URLs, etc.)
@@ -71,7 +74,7 @@ def _vectorize_concepts(
 
 def _cluster_concepts(
     vectors: np.ndarray,
-    similarity_threshold: float = 0.85,
+    similarity_threshold: float,
     linkage: str = "average",
 ) -> np.ndarray:
     """Cluster concept vectors using agglomerative clustering.
@@ -233,8 +236,8 @@ def _rewrite_edges(
 
 def merge_semantically(
     sanitized_graph: Dict,
-    embedding_provider_name: str = "sentence-transformers",
-    similarity_threshold: float = 0.85,
+    embedding_provider_name: str = "sentence_transformers",
+    similarity_threshold: float = None,
     **embedding_kwargs,
 ) -> Dict:
     """Perform Phase-3 semantic merging.
@@ -245,12 +248,16 @@ def merge_semantically(
     Args:
         sanitized_graph: Phase-2.5 output
         embedding_provider_name: which embedding backend to use
-        similarity_threshold: clustering threshold (0.85 = safe, 0.90 = strict)
+        similarity_threshold: clustering threshold (from admin_policy if None)
         **embedding_kwargs: additional args for embedding provider
 
     Returns:
         semantic graph dict
     """
+    # Load similarity_threshold from admin_policy if not provided
+    if similarity_threshold is None:
+        from app.config.admin_policy import admin_policy
+        similarity_threshold = admin_policy.algorithm.graph_merging.similarity_threshold
     # Step 1: Filter to concept nodes only
     concept_nodes, node_to_idx = _filter_concept_nodes(sanitized_graph)
 

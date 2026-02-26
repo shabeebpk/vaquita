@@ -23,10 +23,16 @@ class IngestionService:
     Precision Ingestion Service.
     
     Responsibility: Coordinate the 4-layer Ingestion Pipeline:
-    1. Adapter Layer (DLA/Physical Extraction)
-    2. Refinery Layer (LLM Text Cleaning)
-    3. Slicing Layer (Sentence-aware Blocking)
-    4. Storage Layer (Persistence)
+    1. Adapter Layer (DLA/Physical Extraction) → returns regions only
+    2. Refinery Layer (LLM Text Cleaning) → cleans region text
+    3. RAW_TEXT ENFORCEMENT → concatenate and store to IngestionSource.raw_text (canonical)
+    4. Slicing Layer (Sentence-aware Blocking) → slice from raw_text only
+    5. Storage Layer (Persistence) → create TextBlock rows
+    
+    CONTRACT ENFORCEMENT:
+    All extracted text MUST be written to IngestionSource.raw_text before slicing occurs.
+    No adapter, caller, or refinery may bypass this column. This ensures a single source
+    of truth for ingested content and maintains data integrity.
     """
 
     @staticmethod
@@ -109,10 +115,16 @@ class IngestionService:
                     
                     full_text = "\n\n".join(refined_parts)
 
-                    # 3. Slicing Layer: Sentence Integrity
+                    # ENFORCE: Write extracted/refined text back to raw_text (canonical storage)
+                    # All adapters and extractors must populate this column before slicing
+                    unprocessed_source.raw_text = full_text
+                    session.add(unprocessed_source)
+                    logger.info(f"IngestionService: Stored extracted text ({len(full_text)} chars) to raw_text for source {unprocessed_source.id}")
+
+                    # 3. Slicing Layer: Sentence Integrity (reads from canonical raw_text)
                     from app.ingestion.slicing.service import SentenceSlicingService
                     slicer = SentenceSlicingService()
-                    blocks = slicer.slice_text(full_text)
+                    blocks = slicer.slice_text(unprocessed_source.raw_text)
 
                     # 4. Storage Layer: Persistence
                     for idx, b_text in enumerate(blocks, 1):
