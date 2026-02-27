@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from celery_app import celery_app
 from celery.exceptions import MaxRetriesExceededError
 
-from app.storage.models import Job, File, IngestionSource, IngestionSourceType, ConversationMessage, MessageRole, MessageType, DecisionResult
+from app.storage.models import Job, File, IngestionSource, IngestionSourceType, ConversationMessage, MessageRole, MessageType, DecisionResult, VerificationResult
 from app.storage.db import engine
 from app.config.job_config import JobConfig
 from events import publish_event
@@ -414,12 +414,54 @@ def path_reasoning_stage(self, job_id: int):
         job = session.query(Job).get(job_id)
         if not job or job.status != "GRAPH_SEMANTIC_MERGED":
             return
+        job_mode = job.mode or "discovery"
+        # parse job config for both modes
+        job_config = None
+        if job.job_config and isinstance(job.job_config, dict):
+            from app.config.job_config import JobConfig
+            job_config = JobConfig(**job.job_config)
 
     try:
         persisted_graph = get_semantic_graph(job_id)
         if not persisted_graph:
             raise ValueError("Semantic graph not found for reasoning")
+
+        # If this job is verification mode, bypass normal hypothesis generation
+        if job_mode == "verification":
+            # Obtain source/target from VerificationResult table (not job_config)
+            src = None
+            tgt = None
+            with Session(engine) as session:
+                vr = session.query(VerificationResult).filter(VerificationResult.job_id == job_id).first()
+                if vr:
+                    src = vr.source
+                    tgt = vr.target
             
+            if not src or not tgt:
+                logger.error(f"Job {job_id} verification mode but no source/target found in VerificationResult table")
+                raise ValueError("Verification job missing source/target from VerificationResult table")
+            
+            from app.path_reasoning.reasoning import run_path_reasoning_verification
+            result = run_path_reasoning_verification(
+                persisted_graph,
+                src,
+                tgt,
+                stoplist=set(job_config.path_reasoning_config.stoplist) if job_config else None,
+            )
+            # persist the verification result on the job
+            with Session(engine) as session2:
+                job2 = session2.query(Job).get(job_id)
+                job2.result = {
+                    "verification_result": result,
+                    "verification_source": src,
+                    "verification_target": tgt,
+                }
+                job2.status = "PATH_REASONING_DONE"
+                session2.commit()
+            publish_event({"job_id": job_id, "stage": "path_reasoning", "status": "completed", "mode": "verification"})
+            decision_stage.delay(job_id)
+            return
+
         # Compute affected nodes (new canonical nodes) by comparing versions
         affected_nodes = set()
         try:
@@ -505,7 +547,20 @@ def decision_stage(self, job_id: int):
             "id": job.id,
             "status": job.status,
             "created_at": job.created_at.isoformat() if job.created_at else None,
+            "mode": job.mode,
+            "verification_source": None,
+            "verification_target": None,
+            "verification_result": None,
         }
+        # attach any previously computed verification details
+        if job.mode == "verification":
+            # Read verification entities from VerificationResult table (not job_config)
+            vr = session.query(VerificationResult).filter(VerificationResult.job_id == job_id).first()
+            if vr:
+                job_metadata["verification_source"] = vr.source
+                job_metadata["verification_target"] = vr.target
+            if job.result and isinstance(job.result, dict):
+                job_metadata["verification_result"] = job.result.get("verification_result")
 
         controller = get_decision_controller()
         controller.decide(
@@ -517,11 +572,11 @@ def decision_stage(self, job_id: int):
         
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
-            job.status = "DECISION_MADE"
+            job.status = "RUNNING_HANDLERS"
             session.commit()
             
         publish_event({"job_id": job_id, "stage": "decision", "status": "completed"})
-        signal_evaluation_stage.delay(job_id)
+        handler_execution_stage.delay(job_id)
         
     except Exception as e:
         logger.error(f"Decision logic failed for job {job_id}: {e}")
@@ -529,69 +584,8 @@ def decision_stage(self, job_id: int):
 
 
 # ============================================================================
-# Stage 8: Signal Evaluation
-# ============================================================================
-
-@celery_app.task(
-    name="stage.signal_evaluation",
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 2, "countdown": 15}
-)
-def signal_evaluation_stage(self, job_id: int):
-    """Computes learning outcomes based on measurement deltas."""
-    from app.signals.evaluator import find_pending_run_for_evaluation, get_last_decision_before_run, compute_measurement_delta
-    from app.signals.applier import classify_signal, apply_signal_result
-    
-    publish_event({"job_id": job_id, "stage": "signal_evaluation", "status": "started"})
-    
-    with Session(engine) as session:
-        job = session.query(Job).get(job_id)
-        if not job or job.status != "DECISION_MADE":
-            return
-
-    try:
-        with Session(engine) as session:
-            decision_record = session.query(DecisionResult).filter(
-                DecisionResult.job_id == job_id
-            ).order_by(DecisionResult.created_at.desc()).first()
-            
-            if not decision_record:
-                logger.warning(f"No decision result found for job {job_id}, skipping signal evaluation")
-            else:
-                snapshot = {
-                    "job_id": job_id,
-                    "created_at": decision_record.created_at,
-                    "measurements": decision_record.measurements_snapshot
-                }
-                
-                pending_runs = find_pending_run_for_evaluation(job_id, snapshot, session)
-                if pending_runs:
-                    anchor_run = pending_runs[-1]
-                    before_decision = get_last_decision_before_run(job_id, anchor_run, session)
-                    
-                    if before_decision:
-                        delta = compute_measurement_delta(before_decision["measurements"], snapshot["measurements"])
-                        val, status = classify_signal(delta)
-                        for run in pending_runs:
-                            apply_signal_result(run, val, status, session)
-                            
-        # Always proceed to handlers
-        with Session(engine) as session:
-            job = session.query(Job).get(job_id)
-            job.status = "RUNNING_HANDLERS"
-            session.commit()
-            
-        publish_event({"job_id": job_id, "stage": "signal_evaluation", "status": "completed"})
-        handler_execution_stage.delay(job_id)
-        
-    except Exception as e:
-        logger.error(f"Signal evaluation failed for job {job_id}: {e}")
-        raise
-
-
-# ============================================================================
-# Stage 9: Handler Execution
+# Stage 8: Handler Execution (Previously Stage 9)
+# Note: Removed signal evaluation stage - signals are no longer computed
 # ============================================================================
 
 @celery_app.task(
@@ -662,19 +656,10 @@ def handler_execution_stage(self, job_id: int):
             elif status == "COMPLETED":
                 logger.info(f"Job {job_id} reached terminal state: COMPLETED")
                 # Optimization: No next task needed
-                
-            elif status == "WAITING_FOR_USER":
-                logger.info(f"Job {job_id} paused: WAITING_FOR_USER (Clarification needed)")
-                
-            elif status == "NEEDS_EXPERT_REVIEW":
-                logger.info(f"Job {job_id} paused: NEEDS_EXPERT_REVIEW (Escalated)")
-                
+
             elif status == "NEED_MORE_INPUT":
                 logger.info(f"Job {job_id} paused: NEED_MORE_INPUT (Insufficient signal)")
                 
-            elif status == "MANUAL_REVIEW":
-                logger.info(f"Job {job_id} paused: MANUAL_REVIEW (System uncertain)")
-            
             else:
                 logger.error(f"Job {job_id} transitioned to unhandled status: {status}. Halting task chain.")
     except Exception as e:
@@ -715,10 +700,30 @@ def fetch_stage(self, job_id: int):
         with Session(engine) as session:
             from app.fetching.service import get_fetch_service
             fetch_service = get_fetch_service()
-            fetch_service.execute_fetch_stage(job_id, hypotheses, session)
+            
+            # Get job mode and verification entities for fetch service
+            job_obj = session.query(Job).get(job_id)
+            job_mode = job_obj.mode if job_obj else "discovery"
+            verification_entities = None
+            
+            # For verification mode, get source and target from VerificationResult
+            if job_mode == "verification":
+                vr = session.query(VerificationResult).filter(VerificationResult.job_id == job_id).first()
+                if vr:
+                    verification_entities = (vr.source, vr.target)
+            
+            fetch_service.execute_fetch_stage(
+                job_id, 
+                hypotheses, 
+                session, 
+                job_mode=job_mode,
+                verification_entities=verification_entities
+            )
             
             # CRITICAL: Commit the session to persist all fetched data
             session.commit()
+
+            logger.info("\n\n\n\n---fetch---\n\n\n\n")
         
         with Session(engine) as session:
             if verify_fetch_sources_ready(job_id, session):

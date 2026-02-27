@@ -334,3 +334,219 @@ def run_path_reasoning(
     # Sort hypotheses by confidence desc, deterministic tie-break by source->target
     hypotheses.sort(key=lambda h: (-h["confidence"], h["source"], h["target"]))
     return hypotheses
+
+
+def _collect_supporting_papers(path: List[str], G: nx.DiGraph) -> List[Dict]:
+    """Collect supporting papers (source IDs) from all edges in a path.
+    
+    Args:
+        path: List of node texts forming the path
+        G: NetworkX DiGraph
+    
+    Returns:
+        List of dicts with {paper_id, triple_ids, predicates}
+    """
+    papers_map: Dict[int, Dict] = {}
+    
+    for i in range(len(path) - 1):
+        u = path[i]
+        v = path[i + 1]
+        edge_data = G.edges.get((u, v), {})
+        
+        # Collect source IDs from this edge
+        for source_id_list in edge_data.get("source_ids_list", []):
+            for paper_id in source_id_list:
+                if paper_id not in papers_map:
+                    papers_map[paper_id] = {
+                        "paper_id": paper_id,
+                        "triple_ids": [],
+                        "predicates": [],
+                    }
+                papers_map[paper_id]["predicates"].extend(edge_data.get("predicates", []))
+        
+        # Collect triple IDs
+        for triple_id_list in edge_data.get("triple_ids_list", []):
+            for triple_id in triple_id_list:
+                if papers_map:
+                    first_paper = next(iter(papers_map.values()))
+                    if triple_id not in first_paper["triple_ids"]:
+                        first_paper["triple_ids"].append(triple_id)
+    
+    return list(papers_map.values())
+
+
+def run_path_reasoning_verification(
+    semantic_graph: Dict,
+    source: str,
+    target: str,
+    stoplist: Optional[Set[str]] = None,
+) -> Dict:
+    """Verification mode path reasoning: check if source and target are connected.
+    
+    This function is used in verification mode to determine if two entities
+    (source and target) are connected in the knowledge graph.
+    
+    Strategy:
+    1. Check for direct edge (A->C or C->A, treated as undirected)
+    2. If not found, check for indirect paths of exactly length 3 (A-B-C or C-B-A)
+    3. Return simple result: {found: bool, type: 'direct'|'indirect'|null, path: [...], ...}
+    
+    Args:
+        semantic_graph: The Phase-3 semantic graph dict
+        source: Source entity text to search from
+        target: Target entity text to search to
+        stoplist: Optional set of stoplisted intermediate nodes
+    
+    Returns:
+        Dict with keys:
+        - found (bool): Whether a connection exists
+        - type (str or null): 'direct' or 'indirect' if found, null otherwise
+        - path (list or null): The path if found, null otherwise
+        - supporting_papers (list): Contributing papers/edges
+        - explanation (str): Human-readable explanation
+    """
+    stoplist = set(s.lower() for s in (stoplist or []))
+    
+    # Convert to networkx graph
+    G = _graph_to_nx(semantic_graph)
+    alias_map = _alias_to_canonical_map(semantic_graph)
+    
+    # Resolve aliases to canonical forms
+    canonical_source = alias_map.get(source, source)
+    canonical_target = alias_map.get(target, target)
+    
+    logger.debug(f"Verification: checking connection {canonical_source} <-> {canonical_target}")
+    
+    # Check if nodes exist in graph
+    if canonical_source not in G:
+        logger.debug(f"Source node '{canonical_source}' not in graph")
+        return {
+            "found": False,
+            "type": None,
+            "path": None,
+            "supporting_papers": [],
+            "explanation": f"Source '{source}' not found in knowledge graph"
+        }
+    
+    if canonical_target not in G:
+        logger.debug(f"Target node '{canonical_target}' not in graph")
+        return {
+            "found": False,
+            "type": None,
+            "path": None,
+            "supporting_papers": [],
+            "explanation": f"Target '{target}' not found in knowledge graph"
+        }
+    
+    # Step 1: Check for direct edge (A->C or C->A, treat as same)
+    if G.has_edge(canonical_source, canonical_target):
+        path = [canonical_source, canonical_target]
+        supporting_papers = _collect_supporting_papers(path, G)
+        logger.info(f"Verification: FOUND direct connection {canonical_source} -> {canonical_target}")
+        return {
+            "found": True,
+            "type": "direct",
+            "path": path,
+            "supporting_papers": supporting_papers,
+            "explanation": f"Found direct connection between {source} and {target}"
+        }
+    
+    # Also check reverse direction for undirected semantics
+    if G.has_edge(canonical_target, canonical_source):
+        path = [canonical_target, canonical_source]
+        supporting_papers = _collect_supporting_papers(path, G)
+        logger.info(f"Verification: FOUND direct connection (reverse) {canonical_target} -> {canonical_source}")
+        return {
+            "found": True,
+            "type": "direct",
+            "path": path,
+            "supporting_papers": supporting_papers,
+            "explanation": f"Found direct connection between {target} and {source}"
+        }
+    
+    # Step 2: Check for indirect paths of EXACTLY length 3 (A-B-C with cutoff=3 means path of 3 nodes)
+    # Try forward direction: source -> ... -> target
+    paths_found = list(nx.all_simple_paths(
+        G, 
+        canonical_source, 
+        canonical_target, 
+        cutoff=3
+    ))
+    
+    for path in paths_found:
+        # Only consider length-3 paths (A-B-C, which has 3 nodes)
+        if len(path) != 3:
+            continue
+        
+        # Apply stoplist filtering to intermediate nodes
+        if _path_contains_bad_node(path, G, stoplist):
+            continue
+        
+        # Found a valid indirect path
+        supporting_papers = _collect_supporting_papers(path, G)
+        explanation_parts = []
+        for i in range(len(path) - 1):
+            u = path[i]
+            v = path[i + 1]
+            edge_data = G.edges.get((u, v), {})
+            preds = edge_data.get("predicates", [])
+            part = f"{u} -[{', '.join(preds)}]-> {v}" if preds else f"{u} -> {v}"
+            explanation_parts.append(part)
+        explanation = " -> ".join(explanation_parts)
+        
+        logger.info(f"Verification: FOUND indirect connection {canonical_source} -> {canonical_target}: {' -> '.join(path)}")
+        return {
+            "found": True,
+            "type": "indirect",
+            "path": path,
+            "supporting_papers": supporting_papers,
+            "explanation": explanation
+        }
+    
+    # Step 3: Try reverse direction for undirected semantics (target -> ...  -> source)
+    paths_found_reverse = list(nx.all_simple_paths(
+        G,
+        canonical_target,
+        canonical_source,
+        cutoff=3
+    ))
+    
+    for path in paths_found_reverse:
+        # Only consider length-3 paths
+        if len(path) != 3:
+            continue
+        
+        # Apply stoplist filtering
+        if _path_contains_bad_node(path, G, stoplist):
+            continue
+        
+        # Found a valid indirect path in reverse direction
+        supporting_papers = _collect_supporting_papers(path, G)
+        explanation_parts = []
+        for i in range(len(path) - 1):
+            u = path[i]
+            v = path[i + 1]
+            edge_data = G.edges.get((u, v), {})
+            preds = edge_data.get("predicates", [])
+            part = f"{u} -[{', '.join(preds)}]-> {v}" if preds else f"{u} -> {v}"
+            explanation_parts.append(part)
+        explanation = " -> ".join(explanation_parts)
+        
+        logger.info(f"Verification: FOUND indirect connection (reverse) {canonical_target} -> {canonical_source}: {' -> '.join(path)}")
+        return {
+            "found": True,
+            "type": "indirect",
+            "path": path,
+            "supporting_papers": supporting_papers,
+            "explanation": explanation
+        }
+    
+    # No connection found
+    logger.info(f"Verification: NOT FOUND connection {canonical_source} <-> {canonical_target}")
+    return {
+        "found": False,
+        "type": None,
+        "path": None,
+        "supporting_papers": [],
+        "explanation": f"No connection found between {source} and {target} within 3 hops"
+    }

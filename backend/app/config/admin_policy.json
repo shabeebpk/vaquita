@@ -30,24 +30,7 @@
             "minimum_hypotheses_threshold": 1,
             "semantic_similarity_threshold": 0.7
         },
-        "signal_params": {
-            "positive_threshold": 1.0,
-            "negative_threshold": -1.0,
-            "reputation_positive_delta": 10,
-            "reputation_negative_delta": -20,
-            "weights": {
-                "passed_hypothesis_count": 1.0,
-                "mean_confidence": 0.8,
-                "graph_density": 0.5,
-                "filtered_to_total_ratio": 0.3
-            },
-            "max_deltas": {
-                "passed_hypothesis_count": 100.0,
-                "mean_confidence": 20.0,
-                "graph_density": 0.2,
-                "filtered_to_total_ratio": 0.5
-            }
-        },
+
         "extraction": {
             "whitelisted_regions": [
                 "abstract",
@@ -93,10 +76,11 @@
             ]
         },
         "path_reasoning_defaults": {
-            "max_hops": 4,
-            "allow_len3": true,
+            "max_hops": 3,
+            "allow_len3": false,
+            "max_indirect_path_length": 3,
             "preferred_predicate_boost_factor": 1.2,
-            "hub_degree_threshold": 50,
+            "hub_degree_threshold": 25,
             "min_confidence": 2
         },
         "domain_resolution": {
@@ -117,7 +101,7 @@
             "temporal_placeholders": true,
             "dominance_gap_threshold": 0.2,
             "min_length": 3,
-            "max_length": 4
+            "max_length": 3
         },
         "graph_merging": {
             "similarity_threshold": 0.85,
@@ -142,12 +126,10 @@
     "query_orchestrator": {
         "signature_length": 64,
         "initial_reputation": 0,
-        "exhaustion_decay": -5,
-        "max_reuse_attempts": 3,
+        "verification_batch_size": 5,
         "fetch_batch_size": 3,
         "results_limit": 10,
         "top_k_hypotheses": 1,
-        "min_reputation": -10,
         "fetch_params": {
             "timeout_seconds": 30,
             "retry_attempts": 3
@@ -165,9 +147,6 @@
                 "semantic_scholar"
             ],
             "computer_science": [
-                "semantic_scholar"
-            ],
-            "physics": [
                 "semantic_scholar"
             ],
             "default": [

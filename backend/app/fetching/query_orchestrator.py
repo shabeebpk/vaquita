@@ -42,16 +42,10 @@ class QueryOrchestratorConfig:
         # Initial reputation score for new queries
         self.initial_reputation = int(qo.initial_reputation)
         
-        # Reputation decay per exhaustion
-        self.reputation_exhaustion_decay = int(qo.exhaustion_decay)
-        
-        # Max reuse attempts for a single query before marking exhausted
-        self.max_reuse_attempts = int(qo.max_reuse_attempts)
-        
         logger.debug(
             f"QueryOrchestratorConfig loaded from AdminPolicy: "
             f"signature_len={self.signature_length}, "
-            f"initial_rep={self.initial_reputation}, max_reuse={self.max_reuse_attempts}"
+            f"initial_rep={self.initial_reputation}"
         )
 
 
@@ -169,7 +163,9 @@ def should_run_query(
     config: Optional[QueryOrchestratorConfig] = None
 ) -> Tuple[bool, str]:
     """
-    Determine if a SearchQuery should be run based on status and history.
+    Determine if a SearchQuery should be run based on status.
+    
+    Simple rule: Only 'new' queries should run. Once a query is run, it becomes 'done'.
     
     Args:
         search_query: SearchQuery model instance
@@ -182,30 +178,12 @@ def should_run_query(
     if config is None:
         config = QueryOrchestratorConfig()
     
-    # Never run blocked queries
-    if search_query.status == "blocked":
-        return False, "Query blocked (negative signal history)"
-    
-    # Never run exhausted queries
-    if search_query.status == "exhausted":
-        return False, "Query exhausted (zero signal)"
-    
-    # New queries always run
+    # Only new queries run
     if search_query.status == "new":
-        return True, "Initial attempt"
+        return True, "Ready to execute"
     
-    # Reusable queries run if not exceeded max attempts
-    if search_query.status == "reusable":
-        run_count = session.query(SearchQueryRun).filter(
-            SearchQueryRun.search_query_id == search_query.id
-        ).count()
-        
-        if run_count < config.max_reuse_attempts:
-            return True, f"Reuse attempt {run_count + 1}/{config.max_reuse_attempts}"
-        else:
-            return False, f"Exceeded max reuse attempts ({config.max_reuse_attempts})"
-    
-    return False, "Unknown status"
+    # All other statuses (done) should not run
+    return False, f"Query already executed (status={search_query.status})"
 
 
 from sqlalchemy import func
@@ -281,27 +259,169 @@ def record_search_run(
 
 def update_search_query_status(
     search_query: SearchQuery,
-    papers_found_count: int,
     session: Session
 ):
     """
-    Update SearchQuery status based on run results.
+    Mark a SearchQuery as 'done' after execution.
     
     Args:
         search_query: SearchQuery model instance
-        papers_found_count: Number of papers found in the latest run
         session: SQLAlchemy session
     """
     old_status = search_query.status
-    
-    if old_status == "new":
-        if papers_found_count > 0:
-            search_query.status = "reusable"
-        else:
-            search_query.status = "exhausted"
-    
-    # Note: Transition from 'reusable' to 'exhausted' or 'blocked' 
-    # is handled by the signal evaluator, not the fetcher.
+    search_query.status = "done"
     
     if old_status != search_query.status:
-        logger.info(f"SearchQuery {search_query.id} status updated: {old_status} -> {search_query.status}")
+        logger.info(f"SearchQuery {search_query.id} status updated: {old_status} -> done")
+
+
+def compute_entities_hash(entities: list) -> str:
+    """Compute hash of entities for deduplication check.
+    
+    Different orderings ([a,c] vs [c,a]) are treated as different.
+    
+    Args:
+        entities: List of entity strings
+    
+    Returns:
+        Hex hash string
+    """
+    entity_str = "|".join(str(e).lower() for e in entities)
+    hash_obj = hashlib.sha256(entity_str.encode("utf-8"))
+    return hash_obj.hexdigest()[:16]
+
+
+def check_entities_duplicate(
+    job_id: int,
+    entities: list,
+    session: Session
+) -> bool:
+    """Check if same entities have already been used for search in this job.
+    
+    Args:
+        job_id: Job ID
+        entities: List of entity strings
+        session: SQLAlchemy session
+    
+    Returns:
+        True if duplicate found, False otherwise
+    """
+    entities_hash = compute_entities_hash(entities)
+    
+    existing = session.query(SearchQuery).filter(
+        SearchQuery.job_id == job_id,
+        SearchQuery.entities_hash == entities_hash
+    ).first()
+    
+    return existing is not None
+
+
+def create_verification_search_queries(
+    job_id: int,
+    source: str,
+    target: str,
+    session: Session,
+    config: Optional[QueryOrchestratorConfig] = None,
+    resolved_domain: Optional[str] = None,
+) -> list:
+    """
+    Create search queries for verification mode.
+    
+    Verification mode hierarchy:
+    1. Start with [source, target] combined ([A,C])
+    2. Then try [source] alone ([A])
+    3. Then try [target] alone ([C])
+    
+    Args:
+        job_id: Job ID
+        source: Source entity
+        target: Target entity
+        session: SQLAlchemy session
+        config: QueryOrchestratorConfig
+        resolved_domain: Domain for search (from config or null for default)
+    
+    Returns:
+        List of SearchQuery instances created
+    """
+    if config is None:
+        config = QueryOrchestratorConfig()
+    
+    queries = []
+    
+    # Capture current config snapshot
+    config_snapshot = {
+        "signature_length": config.signature_length,
+        "initial_reputation": config.initial_reputation,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    # Strategy 1: Combined [source, target]
+    entities_combined = [source, target]
+    if not check_entities_duplicate(job_id, entities_combined, session):
+        query_text = f"relationship between {source} and {target}"
+        entities_hash = compute_entities_hash(entities_combined)
+        
+        sq = SearchQuery(
+            job_id=job_id,
+            hypothesis_signature=hashlib.sha256(f"{source}→{target}".encode()).hexdigest()[:16],
+            query_text=query_text,
+            resolved_domain=resolved_domain,
+            status="new",
+            reputation_score=config.initial_reputation,
+            config_snapshot=config_snapshot,
+            entities_used=entities_combined,
+            entities_hash=entities_hash,
+        )
+        session.add(sq)
+        queries.append(sq)
+        logger.info(f"Created verification query: {query_text} (entities={entities_combined})")
+    else:
+        logger.debug(f"Skipped duplicate entities: {entities_combined}")
+    
+    # Strategy 2: Source alone [A]
+    entities_source = [source]
+    if not check_entities_duplicate(job_id, entities_source, session):
+        query_text = f"related to {source}"
+        entities_hash = compute_entities_hash(entities_source)
+        
+        sq = SearchQuery(
+            job_id=job_id,
+            hypothesis_signature=hashlib.sha256(f"{source}_single".encode()).hexdigest()[:16],
+            query_text=query_text,
+            resolved_domain=resolved_domain,
+            status="new",
+            reputation_score=config.initial_reputation,
+            config_snapshot=config_snapshot,
+            entities_used=entities_source,
+            entities_hash=entities_hash,
+        )
+        session.add(sq)
+        queries.append(sq)
+        logger.info(f"Created verification query: {query_text} (entities={entities_source})")
+    else:
+        logger.debug(f"Skipped duplicate entities: {entities_source}")
+    
+    # Strategy 3: Target alone [C]
+    entities_target = [target]
+    if not check_entities_duplicate(job_id, entities_target, session):
+        query_text = f"related to {target}"
+        entities_hash = compute_entities_hash(entities_target)
+        
+        sq = SearchQuery(
+            job_id=job_id,
+            hypothesis_signature=hashlib.sha256(f"{target}_single".encode()).hexdigest()[:16],
+            query_text=query_text,
+            resolved_domain=resolved_domain,
+            status="new",
+            reputation_score=config.initial_reputation,
+            config_snapshot=config_snapshot,
+            entities_used=entities_target,
+            entities_hash=entities_hash,
+        )
+        session.add(sq)
+        queries.append(sq)
+        logger.info(f"Created verification query: {query_text} (entities={entities_target})")
+    else:
+        logger.debug(f"Skipped duplicate entities: {entities_target}")
+    
+    return queries

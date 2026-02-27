@@ -2,6 +2,8 @@
 FetchService: Singleton orchestrator for domain-aware paper fetching.
 """
 import logging
+import hashlib
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
@@ -82,20 +84,31 @@ class FetchService:
             }
         return {}
 
-    def execute_fetch_stage(self, job_id: int, hypotheses: List[Dict[str, Any]], session: Session):
+    def execute_fetch_stage(self, job_id: int, hypotheses: List[Dict[str, Any]], session: Session, job_mode: str = "discovery", verification_entities: tuple = None):
         """
         Main entry point for the Fetch Stage (Universal Lead Orchestration).
         
+        Handles both discovery mode (hypothesis-based) and verification mode (entity-based).
+        
         Harmonizes:
-        1. Hypotheses (Machine Discovered)
-        2. Vanguard Seeds (User Intent via SearchQuery status='new')
+        1. Hypotheses (Machine Discovered) - for discovery mode
+        2. Entity pairs (User Intent via verification mode) - for verification mode
+        3. SearchQuery status='new' queries (Vanguard Seeds)
         """
-        logger.info(f"FetchService: Starting fetch stage for Job {job_id}")
+        logger.info(f"FetchService: Starting fetch stage for Job {job_id}, mode={job_mode}")
         
         # 1. Load Thresholds from AdminPolicy (No Hardcoding)
+        query_config = QueryOrchestratorConfig()
+        
+        if job_mode == "verification" and verification_entities:
+            return self._execute_verification_fetch(job_id, verification_entities, session, query_config)
+        else:
+            return self._execute_discovery_fetch(job_id, hypotheses, session, query_config)
+    
+    def _execute_discovery_fetch(self, job_id: int, hypotheses: List[Dict[str, Any]], session: Session, query_config: QueryOrchestratorConfig):
+        """Discovery mode fetch: based on hypotheses."""
         top_k = int(admin_policy.query_orchestrator.top_k_hypotheses)
         batch_size = int(admin_policy.query_orchestrator.fetch_batch_size)
-        query_config = QueryOrchestratorConfig()
         
         # 2. Harmonize Lead Selection
         # 2a. Machine Leads (Grouped Diversity)
@@ -147,10 +160,166 @@ class FetchService:
             )
             all_targets.append(("machine", s_query))
 
-        # 5. execute Unified Fetch
+        # Execute the rest of discovery fetch
+        self._execute_unified_fetch(job_id, all_targets, batch_size, session, seen_ids, query_config)
+    
+    def _get_next_verification_entities(self, job_id: int, source: str, target: str, session: Session) -> Optional[List[str]]:
+        """
+        Determine the next entity combination to try in verification hierarchy.
+        Returns the entities to use, or None if all have been tried.
+        
+        Hierarchy:
+        1. [source, target] - both entities
+        2. [source] - source alone
+        3. [target] - target alone
+        """
+        from app.fetching.query_orchestrator import compute_entities_hash
+        
+        # Check [A,B] status
+        entities_ab = [source, target]
+        hash_ab = compute_entities_hash(entities_ab)
+        query_ab = session.query(SearchQuery).filter(
+            SearchQuery.job_id == job_id,
+            SearchQuery.entities_hash == hash_ab
+        ).first()
+        
+        # If [A,B] doesn't exist or is still 'new', try it
+        if not query_ab or query_ab.status == "new":
+            return entities_ab
+        
+        # [A,B] is done, try [A]
+        entities_a = [source]
+        hash_a = compute_entities_hash(entities_a)
+        query_a = session.query(SearchQuery).filter(
+            SearchQuery.job_id == job_id,
+            SearchQuery.entities_hash == hash_a
+        ).first()
+        
+        if not query_a or query_a.status == "new":
+            return entities_a
+        
+        # [A] is done, try [B]
+        entities_b = [target]
+        hash_b = compute_entities_hash(entities_b)
+        query_b = session.query(SearchQuery).filter(
+            SearchQuery.job_id == job_id,
+            SearchQuery.entities_hash == hash_b
+        ).first()
+        
+        if not query_b or query_b.status == "new":
+            return entities_b
+        
+        # All done
+        return None
+
+    def _execute_verification_fetch(self, job_id: int, verification_entities: tuple, session: Session, query_config: QueryOrchestratorConfig):
+        """
+        Verification mode fetch: based on user-provided entities.
+        
+        IMPORTANT: Lazy-creates queries one-by-one in hierarchy order:
+        1st cycle: Create and run [source, target]
+        2nd cycle: If not found, create and run [source] alone
+        3rd cycle: If not found, create and run [target] alone
+        
+        Only ONE query is created and executed per call, ensuring logical progression.
+        """
+        batch_size = int(admin_policy.query_orchestrator.verification_batch_size)
+        source, target = verification_entities
+        
+        logger.info(f"FetchService: Verification mode for {source} -> {target}")
+        
+        # Get job config for domain resolution
+        from app.storage.models import Job
+        
+        job = session.query(Job).get(job_id)
+        resolved_domain = None
+        if job and job.job_config:
+            from app.config.job_config import JobConfig
+            if isinstance(job.job_config, dict):
+                cfg = JobConfig(**job.job_config)
+                resolved_domain = cfg.domain
+        
+        # Step 1: Determine next entity combination to try
+        next_entities = self._get_next_verification_entities(job_id, source, target, session)
+        
+        if not next_entities:
+            logger.info(f"FetchService: All verification queries done for job {job_id}")
+            return
+        
+        # Step 2: Get or create query for these entities
+        from app.fetching.query_orchestrator import compute_entities_hash
+        entities_hash = compute_entities_hash(next_entities)
+        
+        search_query = session.query(SearchQuery).filter(
+            SearchQuery.job_id == job_id,
+            SearchQuery.entities_hash == entities_hash
+        ).first()
+        
+        if not search_query:
+            # Create new verification query lazily for these entities
+            config_snapshot = {
+                "signature_length": query_config.signature_length,
+                "initial_reputation": query_config.initial_reputation,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            query_text = (
+                f"relationship between {' and '.join(next_entities)}"
+                if len(next_entities) > 1
+                else f"related to {next_entities[0]}"
+            )
+            
+            search_query = SearchQuery(
+                job_id=job_id,
+                hypothesis_signature=hashlib.sha256(f"verification_{entities_hash}".encode()).hexdigest()[:16],
+                query_text=query_text,
+                resolved_domain=resolved_domain,
+                status="new",
+                reputation_score=query_config.initial_reputation,
+                config_snapshot=config_snapshot,
+                entities_used=next_entities,
+                entities_hash=entities_hash,
+            )
+            session.add(search_query)
+            session.flush()
+            logger.info(f"FetchService: Created verification query for entities {next_entities}")
+        
+        # Step 3: Ensure query is 'new' (if it was 'done' we'd have moved to next level in step 1)
+        if search_query.status != "new":
+            logger.info(f"FetchService: Query for entities {next_entities} already {search_query.status}, nothing to do")
+            return
+        
+        logger.info(f"FetchService: Executing verification query {search_query.id} with entities {next_entities}")
+        
+        # Load IDs for job-level dedup
+        from app.fetching.query_orchestrator import get_all_fetched_ids_for_job
+        seen_ids = set(get_all_fetched_ids_for_job(job_id, session))
+        
+        # Execute ONLY this one query in this cycle
+        all_targets = [("verification", search_query)]
+        self._execute_unified_fetch(job_id, all_targets, batch_size, session, seen_ids, query_config)
+    
+    def _execute_unified_fetch(self, job_id: int, all_targets: List[Tuple[str, SearchQuery]], batch_size: int, session: Session, seen_ids: set, query_config: QueryOrchestratorConfig):
+        """
+        Execute fetch for all targets (unified for both modes).
+        
+        IMPORTANT deduplication logic:
+        ================================
+        LEVEL 1 - GLOBAL DUPLICATE (in Paper table):
+            If paper already exists in system (via fingerprint matching):
+            - DO NOT insert to Paper table (reuse existing)
+            - But still process for job-level inclusion
+        
+        LEVEL 2 - JOB-LEVEL DUPLICATE (in JobPaperEvidence):
+            If paper already linked to this job:
+            - DO NOT create JobPaperEvidence entry
+            - Skip adding to IngestionSource
+        """
+        from app.fetching.query_orchestrator import should_run_query, update_search_query_status
+        
+        # 5. Execute Unified Fetch
         for origin, search_query in all_targets:
             try:
-                from app.fetching.query_orchestrator import should_run_query, update_search_query_status
                 should_run, reason = should_run_query(search_query, session, config=query_config)
                 
                 if not should_run:
@@ -160,26 +329,48 @@ class FetchService:
                 logger.info(f"FetchService: Executing {origin} search for query {search_query.id}")
 
                 # 6. Fetch via domain-aware providers
-                candidates, provider_name = self.fetch_for_hypothesis(search_query, batch_size)
-                
-                # Update status (new -> reusable/exhausted) based on outcome
-                update_search_query_status(search_query, len(candidates), session)
-
-                if not candidates:
-                    logger.info(f"FetchService: No papers found for {origin} lead {search_query.id}")
+                # Attempt to fetch; only mark the query done below if this block completes without
+                # raising an exception. A network error / 429 / provider failure will be caught and the
+                # query left in 'new' state for retries. This mirrors the requirement that status must
+                # only change on a successful HTTP 200-style response.
+                try:
+                    candidates, provider_name = self.fetch_for_hypothesis(search_query, batch_size)
+                    papers_found = len(candidates)
+                    logger.info(f"FetchService: Fetch returned {papers_found} candidate papers for query {search_query.id}")
+                except Exception as fetch_error:
+                    logger.warning(f"FetchService: Fetch for {origin} lead {search_query.id} failed: {fetch_error}")
+                    # no status update here – query stays 'new' for Celery-level retry
                     continue
 
+                # At this point the provider call succeeded.  Even if zero results were returned,
+                # it was still an HTTP 200-like success, so we can mark the query done.
+                if not candidates:
+                    logger.info(f"FetchService: No papers found for {origin} lead {search_query.id}")
+                    update_search_query_status(search_query, session)  # mark done only after successful fetch
+                    session.commit()
+                    continue
+
+                # ===== LEVEL 1 DEDUPLICATION: GLOBAL (Paper table) =====
                 # 7. Global Deduplication and Persistence
                 all_found_papers = self._deduplicate_and_persist(candidates, session)
+                logger.info(f"FetchService: After global dedup, {len(all_found_papers)} papers to process for job {job_id}")
                 
-                # 8. Job-level Deduplication
+                # ===== LEVEL 2 DEDUPLICATION: JOB-LEVEL (JobPaperEvidence + IngestionSource) =====
+                # 8. Job-level Deduplication - only add to job if not already there
                 job_new_papers = []
                 for paper in all_found_papers:
                     if paper.id not in seen_ids:
                         job_new_papers.append(paper)
                         seen_ids.add(paper.id)
+                    else:
+                        logger.debug(f"FetchService: Paper {paper.id} already in job {job_id}, skipping job-level entry")
 
-                # 9. Record SearchQueryRun (Log behavior)
+                if not job_new_papers:
+                    logger.info(f"FetchService: All papers from {origin} query already in job {job_id}")
+                else:
+                    logger.info(f"FetchService: Adding {len(job_new_papers)} new papers to job {job_id} (from {len(all_found_papers)} candidates)")
+
+                # 9. Record SearchQueryRun (Log behavior)  
                 search_run = record_search_run(
                     search_query=search_query,
                     job_id=job_id,
@@ -189,26 +380,33 @@ class FetchService:
                     config=query_config
                 )
                 
-                # 10. Update JobPaperEvidence (Strategic Ledger)
-                from app.storage.models import JobPaperEvidence
-                for paper in job_new_papers:
-                     new_evidence = JobPaperEvidence(
-                         job_id=job_id,
-                         run_id=search_run.id,
-                         paper_id=paper.id,
-                         evaluated=False,
-                         impact_score=0.0,
-                         hypo_ref_count=0,
-                         cumulative_conf=0.0,
-                         entity_density=0
-                     )
-                     session.add(new_evidence)
+                # 10. Update JobPaperEvidence (Strategic Ledger) - ONLY for job-new papers
+                if job_new_papers:
+                    from app.storage.models import JobPaperEvidence
+                    for paper in job_new_papers:
+                        new_evidence = JobPaperEvidence(
+                            job_id=job_id,
+                            run_id=search_run.id,
+                            paper_id=paper.id,
+                            evaluated=False,
+                            impact_score=0.0,
+                            hypo_ref_count=0,
+                            cumulative_conf=0.0,
+                            entity_density=0
+                        )
+                        session.add(new_evidence)
+                    
+                    # 11. Create IngestionSources - ONLY for job-new papers
+                    self._create_ingestion_sources(job_id, job_new_papers, session)
 
-                # 11. Create IngestionSources
-                self._create_ingestion_sources(job_id, job_new_papers, session)
+                # 12. Update query status to 'done' after successful execution
+                update_search_query_status(search_query, session)
+                session.commit()
+                logger.info(f"FetchService: Query {search_query.id} updated - found {papers_found} papers, new to job: {len(job_new_papers)}")
 
             except Exception as e:
                 logger.error(f"FetchService: Error processing {origin} lead {search_query.id}: {e}", exc_info=True)
+                session.rollback()
 
     def fetch_for_hypothesis(self, search_query: SearchQuery, limit: int) -> Tuple[List[Dict[str, Any]], str]:
         """Perform domain-aware provider routing."""

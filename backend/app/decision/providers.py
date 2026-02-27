@@ -47,7 +47,51 @@ class RuleBasedDecisionProvider(DecisionProvider):
     def decide(self, measurements: Dict[str, Any], context: Dict[str, Any]) -> Decision:
         """
         Apply deterministic rules to select a decision.
+        Routes to discovery or verification logic based on job mode.
         """
+        # Get job mode from context
+        job_id = context.get("job_id")
+        job_mode = context.get("job_mode", "discovery")
+        
+        if job_mode == "verification":
+            return self._decide_verification(measurements, context)
+        else:
+            return self._decide_discovery(measurements, context)
+    
+    def _decide_verification(self, measurements: Dict[str, Any], context: Dict[str, Any]) -> Decision:
+        """
+        Verification mode decision logic: VERIFICATION_FOUND or VERIFICATION_NOT_FOUND.
+        
+        Rules:
+        - Found: A-C exists (direct or indirect) - path reasoning sets found=1
+        - Not Found: no graph + all search queries done (exhausted hierarchy: [A,C], [A], [C])
+        
+        Verification halts when all SearchQuery statuses transition from 'new' to 'done'.
+        """
+        # Measurement expects verification-specific fields:
+        # - verification_found (bool)
+        # - verification_complete (bool) - all search queries have status='done'
+        # - verification_type (str)
+        
+        verification_found = measurements.get("verification_found", False)
+        verification_complete = measurements.get("verification_complete", False)
+        
+        # Rule 1: Connection found in path reasoning
+        if verification_found:
+            logger.info("Verification: connection found in graph")
+            return Decision.VERIFICATION_FOUND
+        
+        # Rule 2: All queries done, no connection found - verification complete
+        if verification_complete:
+            logger.info("Verification: all search queries completed, no connection found")
+            return Decision.VERIFICATION_NOT_FOUND
+        
+        # Rule 3: Need to continue searching - more queries are 'new'
+        logger.info("Verification: search in progress, continue fetching next query in hierarchy")
+        return Decision.FETCH_MORE_LITERATURE
+    
+    def _decide_discovery(self, measurements: Dict[str, Any], context: Dict[str, Any]) -> Decision:
+        """Original discovery mode decision logic."""
         # Load config from job context
         job_id = context.get("job_id")
         config = None

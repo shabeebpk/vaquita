@@ -38,6 +38,12 @@ class IngestionSourceType(str, enum.Enum):
     API_TEXT = "api_text"
 
 
+class JobMode(str, enum.Enum):
+    """Mode of operation for a job."""
+    DISCOVERY = "discovery"  # Discover new hypotheses from papers
+    VERIFICATION = "verification"  # Verify if given entities are connected
+
+
 # ============================================================================
 # Core Models: Chat and Job Management
 # ============================================================================
@@ -49,6 +55,9 @@ class Job(Base):
     Responsibility: Track job-level metadata and status. No longer stores user text;
     all user input is now exclusively in ConversationMessage.
     
+    mode: 'discovery' (default) for hypothesis discovery, 'verification' for entity connection verification
+    result: JSON field storing various conclusion results (e.g., verification findings)
+    
     Future extensibility:
     - Add fields for session metadata (model config, parameters, user context)
     - Support branching/forking by adding parent_job_id
@@ -59,9 +68,13 @@ class Job(Base):
     id = Column(Integer, primary_key=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     status = Column(String, nullable=True)  # e.g., "in_progress", "completed", "error"
+    mode = Column(String, nullable=False, server_default='discovery')  # 'discovery' or 'verification'
     
     # Configuration
     job_config = Column(JSONB, nullable=False, server_default='{}')  # Full configuration snapshot
+    
+    # Result storage for verification and conclusions
+    result = Column(JSONB, nullable=True)  # Stores conclusion results  # Full configuration snapshot
 
 
 class ConversationMessage(Base):
@@ -395,6 +408,36 @@ class DecisionResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, nullable=True)
 
+
+class VerificationResult(Base):
+    """
+    Result of verification mode: whether given entities are connected.
+    
+    Responsibility: Store verification test results for entity connection.
+    Records source and target entities, whether connection was found,
+    the connection type (direct or indirect), the path, and supporting papers.
+    
+    connection_found: Boolean indicating if path exists between source and target
+    connection_type: 'direct' (A-C) or 'indirect' (A-B-C path) if found
+    path: JSON array of node texts forming the connection path (if found)
+    explanation: Human-readable description of the connection (if found)
+    supporting_papers: JSON array of {paper_id, contributing_edges} from the path
+    """
+    __tablename__ = "verification_results"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    source = Column(String, nullable=False)
+    target = Column(String, nullable=False)
+    connection_found = Column(Boolean, nullable=True)
+    connection_type = Column(String, nullable=True)  # 'direct' or 'indirect'
+    path = Column(JSON, nullable=True)  # Array of node texts forming the path
+    explanation = Column(Text, nullable=True)  # Human-readable explanation
+    supporting_papers = Column(JSON, nullable=True)  # Array of paper references supporting the path
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
 # ============================================================================
 # FETCH_MORE Literature Pipeline
 # ============================================================================
@@ -411,14 +454,18 @@ class SearchQuery(Base):
     hypothesis_signature: Stable hash derived from hypothesis endpoints (source and target
     node labels), never referencing hypothesis row IDs. Allows query reuse across runs.
     
-    status: one of 'new', 'reusable', 'exhausted', 'blocked'. Evolved only via
-    signal computation based on measurable changes to decision measurements.
+    status: one of 'new' or 'done'.
+    - 'new': Ready to be run
+    - 'done': Has been executed (regardless of papers found)
     
     reputation_score: Numeric value updated only via signal computation, never directly
     by fetch results. Reflects past utility of this query.
     
     config_snapshot: JSONB copy of configuration used when query was created or last
     reused. Immutable for audit trail.
+    
+    entities_used: Array of entities used to prepare this query for deduplication.
+    entities_hash: Hash of entities for quick duplicate check. Different orderings ([a,c] vs [c,a]) are treated as different.
     
     Future extensibility:
     - Add query_type to distinguish between initial, expansion, or reuse attempts
@@ -432,9 +479,13 @@ class SearchQuery(Base):
     hypothesis_signature = Column(String, nullable=False, index=True)  # Stable hash of endpoints
     query_text = Column(Text, nullable=False)  # Human-readable or derived query
     resolved_domain = Column(String, nullable=True, index=True)  # e.g., 'biomedical', 'computer_science'
-    status = Column(String, nullable=False)  # 'new', 'reusable', 'exhausted', 'blocked'
+    status = Column(String, nullable=False)  # 'new' or 'done'
     reputation_score = Column(Integer, default=0, nullable=False)  # Updated only via signal
     config_snapshot = Column(JSONB, nullable=False)  # Config at query creation/reuse time
+    
+    # Entity tracking for deduplication
+    entities_used = Column(JSON, nullable=True)  # Array of entities used to create this query
+    entities_hash = Column(String, nullable=True, index=True)  # Hash of entities for quick duplicate check
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

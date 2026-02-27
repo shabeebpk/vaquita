@@ -239,12 +239,10 @@ class QueryOrchestrator(BaseModel):
     """Query orchestrator configuration."""
     signature_length: int = 64
     initial_reputation: int = 0
-    exhaustion_decay: int = -5
-    max_reuse_attempts: int = 3
-    fetch_batch_size: int = 1
+    fetch_batch_size: int = 3
+    verification_batch_size: int = 5
     results_limit: int = 10
     top_k_hypotheses: int = 1
-    min_reputation: int = -10
     fetch_params: FetchParams = Field(default_factory=FetchParams)
 
 

@@ -72,7 +72,7 @@ class DecisionController:
             job_id: The job ID.
             semantic_graph: Phase-3 semantic graph dict.
             hypotheses: List of persisted hypothesis dicts.
-            job_metadata: Job context (id, status, user_text, etc.).
+            job_metadata: Job context (id, status, user_text, mode, etc.).
             previous_decision_result: Optional previous DecisionResult dict for temporal measurements.
         
         Returns:
@@ -83,6 +83,10 @@ class DecisionController:
             - fallback_used (bool)
             - fallback_reason (str or None)
         """
+        # Load job mode
+        job_mode = job_metadata.get("mode", "discovery")
+        logger.info(f"Decision for job {job_id} in mode: {job_mode}")
+        
         # Compute measurements (optionally with indirect path metrics)
         # Pass previous snapshot for temporal placeholders (growth_rate, stability, etc.)
         previous_snapshot = (
@@ -122,9 +126,10 @@ class DecisionController:
 
         logger.info(f"Computed measurements for job {job_id}: {len(measurements)} signals")
         
-        # Invoke primary provider
+        # Invoke primary provider with job mode
         context = {
             "job_id": job_id,
+            "job_mode": job_mode,
             "semantic_graph": semantic_graph,
             "hypotheses": hypotheses,
         }

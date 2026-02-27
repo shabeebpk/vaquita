@@ -112,6 +112,8 @@ class SemanticScholarProvider(BaseFetchProvider):
                         continue
                     else:
                         logger.error(f"SemanticScholarProvider: Rate limit exceeded after {self.max_retries} attempts")
+                        # Raise exception on HTTP 429 to distinguish from empty result
+                        response.raise_for_status()
                 
                 if response.status_code != 200:
                     logger.error(f"SemanticScholarProvider failed: {response.status_code} - {response.text}")
@@ -127,7 +129,8 @@ class SemanticScholarProvider(BaseFetchProvider):
                     continue
                 raise
         
-        return []
+        # All retries exhausted - raise exception
+        raise requests.exceptions.HTTPError(f"Failed after {self.max_retries} attempts")
 
 
     def _normalize(self, item: Dict[str, Any]) -> Dict[str, Any]:

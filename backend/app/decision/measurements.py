@@ -40,6 +40,24 @@ def compute_measurements(
     decision_config = None
     indirect_config = None
     
+    # verification mode measurements can short-circuit and use job metadata
+    job_mode = job_metadata.get("mode")
+    if job_mode == "verification":
+        # For verification, only check if all queries are 'done' (halting condition)
+        with Session(engine) as session:
+            from app.storage.models import SearchQuery
+            remaining_new = session.query(SearchQuery).filter(
+                SearchQuery.job_id == job_id,
+                SearchQuery.status == "new"
+            ).count()
+        # Verification halts when all queries are done (no 'new' queries remain)
+        measurements["verification_complete"] = (remaining_new == 0)
+        vr = job_metadata.get("verification_result") or {}
+        measurements["verification_found"] = vr.get("found", False)
+        measurements["verification_type"] = vr.get("type")
+        # other measurements are irrelevant for verification; return early
+        return measurements
+
     if job_id:
         with Session(engine) as session:
             job = session.query(Job).filter(Job.id == job_id).first()
