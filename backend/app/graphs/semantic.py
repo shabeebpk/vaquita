@@ -211,10 +211,12 @@ def _rewrite_edges(
             }
 
         meta = edge_dict[key]
-        meta["support"] += support
+        # merge metadata sets
         meta["triple_ids"].update(triple_ids)
         meta["source_ids"].update(source_ids)
         meta["block_ids"].update(block_ids)
+        # recalc support from distinct source_ids
+        meta["support"] = len(meta["source_ids"])
 
     # Rebuild edge list
     rewritten = [
@@ -312,8 +314,10 @@ def merge_semantically(
             # Cosine similarity: dot product of normalized vectors
             similarities = np.dot(member_vectors, centroid)
             cluster_score = float(np.mean(similarities))
+            embedding = centroid.tolist()
         else:
             cluster_score = 1.0  # single-node cluster has perfect score
+            embedding = []
 
         semantic_nodes.append({
             "text": canonical_text,
@@ -321,6 +325,7 @@ def merge_semantically(
             "aliases": aliases,
             "attributes": orig_node.get("attributes", {}),
             "cluster_score": cluster_score,  # semantic tightness: 0–1
+            "embedding": embedding,
         })
 
     # Add non-concept nodes as-is

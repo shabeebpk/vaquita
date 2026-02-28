@@ -46,6 +46,8 @@ class LLMPolicy(BaseModel):
 
 class DecisionThresholds(BaseModel):
     """Decision logic thresholds."""
+    top_k_hypotheses_to_store: int = 5
+    abstract_snippet_length: int = 300
     confidence_norm_factor: int = 10
     high_confidence_threshold: float = 0.7
     dominant_gap_ratio: float = 0.3

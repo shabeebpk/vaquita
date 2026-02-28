@@ -5,7 +5,7 @@ No further pipeline execution occurs for this verification job.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -13,9 +13,19 @@ from sqlalchemy.orm import Session
 from app.decision.handlers.base import Handler, HandlerResult
 from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
-from app.storage.models import Job, VerificationResult
+from app.storage.models import Job, VerificationResult, JobPaperEvidence, Paper, SearchQuery
+from app.path_reasoning.persistence import get_job_papers
 
 logger = logging.getLogger(__name__)
+
+
+def _get_search_queries(job_id: int, session: Session) -> List[Dict[str, Any]]:
+    """Return query texts used to search for this job."""
+    queries = session.query(SearchQuery).filter(SearchQuery.job_id == job_id).all()
+    return [
+        {"query_text": q.query_text, "status": q.status, "entities": q.entities_used}
+        for q in queries
+    ]
 
 
 @register_handler("verification_found")
@@ -33,7 +43,7 @@ class VerificationFoundHandler(Handler):
         """Execute verification found handler.
         
         - Stores verification result as found in verification_results table
-        - Updates job status to COMPLETED
+        - Updates job status to COMPLETED with full conclusion data
         - Returns result for UI
         """
         try:
@@ -49,12 +59,16 @@ class VerificationFoundHandler(Handler):
                 )
             
             connection_type = verification_result.get("type", "unknown")  # 'direct' or 'indirect'
-            supporting_papers = verification_result.get("supporting_papers", [])
+            path_evidence = verification_result.get("supporting_papers", [])
             path = verification_result.get("path")  # List of nodes in the path
             explanation = verification_result.get("explanation", "")  # Human-readable explanation
             
             # Store result in database
             with Session(engine) as session:
+                # Collect papers fetched for this job (for conclusion)
+                fetched_papers = get_job_papers(job_id, session)
+                search_queries_used = _get_search_queries(job_id, session)
+
                 # Create verification result record
                 vr = VerificationResult(
                     job_id=job_id,
@@ -64,7 +78,7 @@ class VerificationFoundHandler(Handler):
                     connection_type=connection_type,
                     path=path,
                     explanation=explanation,
-                    supporting_papers=supporting_papers,
+                    supporting_papers=path_evidence,
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow(),
                 )
@@ -81,14 +95,27 @@ class VerificationFoundHandler(Handler):
                         "connection_type": connection_type,
                         "path": path,
                         "explanation": explanation,
-                        "supporting_papers": supporting_papers,
+                        # Path-level supporting papers (edges proven by specific papers)
+                        "path_supporting_papers": path_evidence,
+                        # All papers fetched during this job's search phase
+                        "fetched_papers": fetched_papers,
+                        "fetched_papers_count": len(fetched_papers),
+                        # Queries used to search
+                        "search_queries": search_queries_used,
                         "completed_at": datetime.utcnow().isoformat(),
                     }
                     session.commit()
-                    logger.info(f"Job {job_id} verification FOUND: {source} -> {target} ({connection_type})")
+                    logger.info(
+                        f"Job {job_id} verification FOUND: {source} -> {target} "
+                        f"({connection_type}), {len(fetched_papers)} papers fetched"
+                    )
                 else:
                     logger.warning(f"Job {job_id} not found for status update")
                     session.rollback()
+                    return HandlerResult(
+                        status="error",
+                        message=f"Job {job_id} not found",
+                    )
             
             final_output = {
                 "job_id": job_id,
@@ -98,7 +125,10 @@ class VerificationFoundHandler(Handler):
                 "connection_type": connection_type,
                 "path": path,
                 "explanation": explanation,
-                "supporting_papers": supporting_papers,
+                "path_supporting_papers": path_evidence,
+                "fetched_papers": fetched_papers,
+                "fetched_papers_count": len(fetched_papers),
+                "search_queries": search_queries_used,
                 "completed_at": datetime.utcnow().isoformat(),
             }
             
@@ -110,7 +140,7 @@ class VerificationFoundHandler(Handler):
             )
         
         except Exception as e:
-            logger.error(f"VerificationFoundHandler failed for job {job_id}: {e}")
+            logger.error(f"VerificationFoundHandler failed for job {job_id}: {e}", exc_info=True)
             return HandlerResult(
                 status="error",
                 message=f"Failed to complete verification: {str(e)}",

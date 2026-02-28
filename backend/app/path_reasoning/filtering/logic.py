@@ -85,16 +85,37 @@ def _graph_to_nx_for_filtering(semantic_graph: Dict) -> nx.DiGraph:
 
 # --- Pure Rule Functions ---
 
-def check_hub_suppression(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optional[str]]:
-    """Rule 1: Reject paths passing through high-degree hubs."""
-    path = hyp.get("path", [])
-    if len(path) > 2:
-        intermediates = path[1:-1]
-        for node in intermediates:
-            deg = ctx.degrees.get(node, 0)
-            if deg > ctx.hub_threshold:
-                return False, f"Node '{node}' has degree {deg} > {ctx.hub_threshold}"
-    return True, None
+def apply_hub_suppression_to_graph(G: nx.DiGraph, hub_degree_threshold: int) -> nx.DiGraph:
+    """Remove high-degree hub nodes from the graph before path enumeration.
+    
+    Hub nodes are intermediate nodes with degree > hub_degree_threshold.
+    Removing hubs before path enumeration dramatically reduces candidate paths
+    and memory usage, and improves reasoning performance.
+    
+    Args:
+        G: NetworkX directed graph with hub nodes
+        hub_degree_threshold: Max degree for intermediate nodes (from admin_policy)
+    
+    Returns:
+        Updated graph with hub nodes and their incident edges removed
+    """
+    if hub_degree_threshold <= 0:
+        # Disabled (0 or negative means no suppression)
+        return G
+    
+    # Identify hub nodes (degree includes both in and out edges in DiGraph)
+    hubs = set()
+    for node in G.nodes():
+        degree = G.degree(node)  # Sum of in-degree and out-degree for DiGraph
+        if degree > hub_degree_threshold:
+            hubs.add(node)
+    
+    if hubs:
+        logger.debug(f"Hub suppression: removing {len(hubs)} nodes with degree > {hub_degree_threshold}")
+        G.remove_nodes_from(hubs)
+        logger.debug(f"Graph after hub suppression: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    
+    return G
 
 
 
@@ -127,15 +148,21 @@ def check_novelty(hyp: Dict, ctx: FilteringContext) -> Tuple[bool, Optional[str]
     return True, None
 
 
-# Check registry (Ordered) — only reversible rejections stored here.
+# Check registry (Ordered) — Permanent rules reject entirely, extractable rules flag only.
 # Permanent structural filters (noise) are applied by
 # sanitize_graph in sanitize.py BEFORE paths are generated.
-RULES = [
-    ("hub_suppression", check_hub_suppression),
+# Note: Hub suppression is now applied at the graph level in reasoning.py
+#       before path enumeration, not as a hypothesis filter.
+PERMANENT_RULES = [
     ("predicate_semantics", check_predicate_semantics),
-    ("evidence_threshold", check_evidence_threshold),
     ("novelty", check_novelty),
 ]
+
+EXTRACTABLE_RULES = [
+    ("evidence_threshold", check_evidence_threshold),
+]
+
+RULES = PERMANENT_RULES + EXTRACTABLE_RULES
 
 
 def is_low_confidence_rejection(hyp: Dict) -> bool:
@@ -165,15 +192,15 @@ def filter_hypotheses(
     hypotheses: List[Dict],
     semantic_graph: Dict,
     config: Dict[str, Any] = None
-) -> List[Dict]:
+) -> Tuple[List[Dict], List[Dict]]:
     """
-    Apply Phase-4.5 filtering rules to a list of hypotheses.
+    Apply Phase-4.5 filtering: Permanent rules reject entirely, extractable rules flag.
 
-    Modifies the hypothesis dictionaries in-place (or returns new ones) by adding:
-      - passed_filter (bool): True if passed all checks
-      - filter_reason (dict): JSON-serializable details on failure, or None
-
-    The function returns the list of processed hypotheses (ALL of them, not just passed).
+    Returns:
+        (passed_hypotheses, failed_hypotheses)
+        - passed_hypotheses: Hypotheses that passed ALL permanent rules
+                            (may have failed extractable rules but kept)
+        - failed_hypotheses: Hypotheses rejected by permanent rules (NOT stored in DB)
     """
     cfg = DEFAULT_CONFIG.copy()
     if config:
@@ -184,28 +211,159 @@ def filter_hypotheses(
     degrees = dict(G.degree())
     ctx = FilteringContext(graph=G, degrees=degrees, config=cfg)
 
-    processed = []
+    passed_hypotheses = []
+    failed_hypotheses = []
 
     for hyp in hypotheses:
-        # Clone to avoid unexpected side-effects if needed, though inplace is fine
-        # We assume inplace modification of the dict is acceptable as per previous impl.
+        # Check permanent rules first
+        permanent_passed = True
+        permanent_reasons = {}
         
-        passed = True
-        reasons = {}
-
-        for rule_name, rule_fn in RULES:
+        for rule_name, rule_fn in PERMANENT_RULES:
             rule_passed, failure_msg = rule_fn(hyp, ctx)
             if not rule_passed:
-                passed = False
-                reasons[rule_name] = failure_msg
-                break  # Stop at first failure
+                permanent_passed = False
+                permanent_reasons[rule_name] = failure_msg
+                break  # Stop at first permanent failure
         
-        hyp["passed_filter"] = passed
-        hyp["filter_reason"] = reasons if not passed else None
+        # If permanent rules failed, reject entirely
+        if not permanent_passed:
+            hyp["passed_filter"] = False
+            hyp["filter_reason"] = permanent_reasons
+            hyp["rejection_type"] = "permanent"
+            failed_hypotheses.append(hyp)
+            continue
         
-        processed.append(hyp)
+        # Permanent rules passed, now check extractable rules
+        extractable_passed = True
+        extractable_reasons = {}
+        
+        for rule_name, rule_fn in EXTRACTABLE_RULES:
+            rule_passed, failure_msg = rule_fn(hyp, ctx)
+            if not rule_passed:
+                extractable_passed = False
+                extractable_reasons[rule_name] = failure_msg
+                break
+        
+        # Extractable rule failures don't reject, just flag
+        hyp["passed_filter"] = extractable_passed
+        hyp["filter_reason"] = extractable_reasons if not extractable_passed else None
+        hyp["rejection_type"] = "extractable" if not extractable_passed else None
+        
+        passed_hypotheses.append(hyp)
 
-    return processed
+    return passed_hypotheses, failed_hypotheses
+
+
+def resolve_domains_batch(
+    hypotheses: List[Dict],
+    llm_client: Any,
+) -> List[Dict]:
+    """
+    Resolve domains for hypotheses in batch by grouping on (source, target) pairs.
+    
+    Groups hypotheses by (source, target), creates a single LLM prompt per group
+    with all intermediate paths, and applies the result to all hypotheses in the group.
+    
+    Args:
+        hypotheses: List of filtered hypotheses
+        llm_client: LLM client for domain resolution
+    
+    Returns:
+        Hypotheses with 'domain' field populated
+    """
+    from app.config.admin_policy import admin_policy
+    from app.prompts.loader import load_prompt
+    
+    allowed_domains = admin_policy.algorithm.domain_resolution.allowed_domains
+    
+    if not allowed_domains:
+        logger.warning("No allowed_domains in admin_policy. Skipping domain resolution.")
+        for hyp in hypotheses:
+            hyp["domain"] = None
+        return hypotheses
+    
+    if llm_client is None:
+        logger.warning("LLM client is None. Skipping domain resolution.")
+        for hyp in hypotheses:
+            hyp["domain"] = None
+        return hypotheses
+    
+    # Group hypotheses by (source, target)
+    grouped: Dict[Tuple[str, str], List[Dict]] = {}
+    for hyp in hypotheses:
+        key = (hyp["source"], hyp["target"])
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(hyp)
+    
+    # For each group, resolve domain once
+    for (source, target), group_hyps in grouped.items():
+        # Format paths for this group
+        paths_text = []
+        for hyp in group_hyps:
+            path = hyp.get("path", [])
+            confidence = hyp.get("confidence", 0)
+            path_str = " → ".join(path)
+            paths_text.append(f"  - {path_str} (confidence: {confidence})")
+        
+        paths_block = "\n".join(paths_text)
+        domains_str = ", ".join(allowed_domains)
+        
+        # Load and format prompt
+        prompt_file = admin_policy.prompt_assets.domain_resolver
+        template = load_prompt(
+            prompt_file,
+            fallback=(
+                "Classify the domain of the following hypothesis.\n"
+                f"Source: {source}\n"
+                f"Target: {target}\n"
+                f"Paths:\n{paths_block}\n"
+                f"Allowed domains: {domains_str}\n"
+                "Return ONLY the domain name if it matches an allowed domain, "
+                "or 'null' (as text) if none match. No explanation."
+            )
+        )
+        
+        try:
+            prompt = template.format(
+                source=source,
+                target=target,
+                paths=paths_block,
+                domains=domains_str,
+            )
+        except KeyError:
+            # Fallback if template has different variables
+            prompt = (
+                f"Classify domain: Source={source}, Target={target}\n"
+                f"Paths:\n{paths_block}\n"
+                f"Domains: {domains_str}"
+            )
+        
+        # Call LLM
+        resolved_domain = None
+        try:
+            response = llm_client.generate(prompt)
+            if response:
+                resolved = response.strip().lower()
+                
+                # Validate against allowed_domains
+                for domain in allowed_domains:
+                    if resolved == domain.lower():
+                        resolved_domain = domain
+                        logger.debug(f"Resolved domain '{domain}' for {source} → {target}")
+                        break
+                
+                if not resolved_domain and resolved != "null":
+                    logger.warning(f"LLM returned invalid domain: '{resolved}' for {source} → {target}")
+        except Exception as e:
+            logger.error(f"Domain resolution failed for {source} → {target}: {e}")
+        
+        # Apply resolved domain to all hypotheses in the group
+        for hyp in group_hyps:
+            hyp["domain"] = resolved_domain
+    
+    return hypotheses
 
 
 def calculate_impact_scores(job_id: int, hypotheses: List[Dict], session: Session) -> None:

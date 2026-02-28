@@ -43,15 +43,44 @@ def compute_measurements(
     # verification mode measurements can short-circuit and use job metadata
     job_mode = job_metadata.get("mode")
     if job_mode == "verification":
-        # For verification, only check if all queries are 'done' (halting condition)
+        # For verification, check if all hierarchy queries (A+C, A, C) are done.
+        # The fetch service lazily creates queries one at a time, so we must only
+        # consider queries that actually exist. We are "complete" when no 'new'
+        # query exists AND at least one query has been created (i.e., some attempt
+        # was made). A single 'new' query means we are still in progress.
         with Session(engine) as session:
             from app.storage.models import SearchQuery
-            remaining_new = session.query(SearchQuery).filter(
+            from app.fetching.query_orchestrator import compute_entities_hash
+
+            source = job_metadata.get("verification_source", "")
+            target = job_metadata.get("verification_target", "")
+
+            # All three possible hierarchy entity combinations
+            hierarchy = [
+                [source, target],  # [A, C]
+                [source],          # [A]
+                [target],          # [C]
+            ]
+            hierarchy_hashes = [compute_entities_hash(e) for e in hierarchy]
+
+            # Check status of all created hierarchy queries for this job
+            hierarchy_queries = session.query(SearchQuery).filter(
                 SearchQuery.job_id == job_id,
-                SearchQuery.status == "new"
-            ).count()
-        # Verification halts when all queries are done (no 'new' queries remain)
-        measurements["verification_complete"] = (remaining_new == 0)
+                SearchQuery.entities_hash.in_(hierarchy_hashes)
+            ).all()
+
+            total_created = len(hierarchy_queries)
+            total_done = sum(1 for q in hierarchy_queries if q.status == "done")
+            any_new = any(q.status == "new" for q in hierarchy_queries)
+
+        # Complete = at least one query was created, none still 'new',
+        # AND all 3 hierarchy levels have been tried (all created == 3)
+        verification_complete = (
+            total_created == 3 and not any_new
+        )
+        measurements["verification_complete"] = verification_complete
+        measurements["verification_hierarchy_created"] = total_created
+        measurements["verification_hierarchy_done"] = total_done
         vr = job_metadata.get("verification_result") or {}
         measurements["verification_found"] = vr.get("found", False)
         measurements["verification_type"] = vr.get("type")

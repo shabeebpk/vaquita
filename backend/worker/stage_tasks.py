@@ -38,7 +38,6 @@ def verify_fetch_sources_ready(job_id: int, session: Session) -> bool:
 from app.config.admin_policy import admin_policy
 # Legacy extraction constants removed
 _SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.graph_merging.similarity_threshold
-_PATH_REASONING_MAX_HOPS = admin_policy.algorithm.path_reasoning_defaults.max_hops
 _MIN_NODE_TEXT_LENGTH = admin_policy.algorithm.graph_merging.min_node_text_length
 
 # Stage -1: Classification and Routing
@@ -481,7 +480,6 @@ def path_reasoning_stage(self, job_id: int):
         seeds = job_config.path_reasoning_config.seeds
         stoplist = set(job_config.path_reasoning_config.stoplist)
         preferred_predicates = job_config.hypothesis_config.preferred_predicates
-        allow_len3 = admin_policy.algorithm.path_reasoning_defaults.allow_len3
         boost_factor = admin_policy.algorithm.path_reasoning_defaults.preferred_predicate_boost_factor
 
         # Expand seeds to include affected nodes so reasoning focuses on changed area
@@ -491,17 +489,15 @@ def path_reasoning_stage(self, job_id: int):
             persisted_graph,
             reasoning_mode="explore",
             seeds=effective_seeds,
-            max_hops=_PATH_REASONING_MAX_HOPS,
-            allow_len3=allow_len3,
             stoplist=stoplist,
             preferred_predicates=preferred_predicates,
             preferred_predicate_boost_factor=boost_factor,
         )
 
-        hypotheses = filter_hypotheses(hypotheses, persisted_graph)
+        passed_hypotheses, failed_hypotheses = filter_hypotheses(hypotheses, persisted_graph)
 
         # Persist incrementally: only deactivate hypotheses touching affected nodes
-        persist_hypotheses(job_id, hypotheses, affected_nodes=affected_nodes if affected_nodes else None)
+        persist_hypotheses(job_id, passed_hypotheses, affected_nodes=affected_nodes if affected_nodes else None)
         
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
@@ -618,7 +614,24 @@ def handler_execution_stage(self, job_id: int):
         if not decision_record:
             return
 
-        metadata = {"id": job.id, "status": job.status, "created_at": job.created_at.isoformat() if job.created_at else None}
+        metadata = {
+            "id": job.id,
+            "status": job.status,
+            "mode": job.mode,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "verification_source": None,
+            "verification_target": None,
+            "verification_result": None,
+        }
+        # For verification mode, attach source/target/result so handlers can use them
+        if job.mode == "verification":
+            vr_row = session.query(VerificationResult).filter(VerificationResult.job_id == job_id).first()
+            if vr_row:
+                metadata["verification_source"] = vr_row.source
+                metadata["verification_target"] = vr_row.target
+            if job.result and isinstance(job.result, dict):
+                metadata["verification_result"] = job.result.get("verification_result")
+
         decision_data = {
             "decision_label": decision_record.decision_label,
             "provider_used": decision_record.provider_used,

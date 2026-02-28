@@ -133,7 +133,20 @@ def incremental_merge_semantically(
     # Start from existing edges and add rewritten edges from sanitized_graph
     existing_edges = existing.get("edges", [])
     edge_dict = {}
+    
+    # Initialize with existing edges (copy support as-is, don't accumulate)
+    for e in existing_edges:
+        key = (e.get("subject"), e.get("predicate"), e.get("object"))
+        edge_dict[key] = {
+            "support": e.get("support", 1),
+            "triple_ids": set(e.get("triple_ids", [])),
+            "source_ids": set(e.get("source_ids", [])),
+            "block_ids": set(e.get("block_ids", [])),
+        }
+    
+    # Process new edges from sanitized_graph
     def _add_edge_to_dict(edge):
+        """Add/merge new edges from sanitized_graph (accumulate only new evidence)."""
         key = (edge.get("subject"), edge.get("predicate"), edge.get("object"))
         if key not in edge_dict:
             edge_dict[key] = {
@@ -143,16 +156,15 @@ def incremental_merge_semantically(
                 "block_ids": set(),
             }
         meta = edge_dict[key]
-        meta["support"] += edge.get("support", 1)
+        # merge metadata sets
         for tid in edge.get("triple_ids", []):
             meta["triple_ids"].add(tid)
         for sid in edge.get("source_ids", []):
             meta["source_ids"].add(sid)
         for bid in edge.get("block_ids", []):
             meta["block_ids"].add(bid)
-
-    for e in existing_edges:
-        _add_edge_to_dict(e)
+        # recalc support as number of distinct source papers
+        meta["support"] = len(meta["source_ids"])
 
     # Process sanitized_graph edges: map nodes via mapping if present
     for edge in sanitized_graph.get("edges", []):

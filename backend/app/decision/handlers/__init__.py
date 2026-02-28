@@ -15,6 +15,8 @@ import app.decision.handlers.halt_no_hypothesis
 import app.decision.handlers.fetch_more_literature
 import app.decision.handlers.insufficient_signal
 import app.decision.handlers.strategic_download
+import app.decision.handlers.verification_found
+import app.decision.handlers.verification_not_found
 
 __all__ = [
     "get_handler_for_decision",

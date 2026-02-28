@@ -5,7 +5,7 @@ after exhausting all search strategies. No further pipeline execution occurs.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -13,9 +13,19 @@ from sqlalchemy.orm import Session
 from app.decision.handlers.base import Handler, HandlerResult
 from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
-from app.storage.models import Job, VerificationResult
+from app.storage.models import Job, VerificationResult, JobPaperEvidence, Paper, SearchQuery
+from app.path_reasoning.persistence import get_job_papers
 
 logger = logging.getLogger(__name__)
+
+
+def _get_search_queries(job_id: int, session: Session) -> List[Dict[str, Any]]:
+    """Return query texts used to search for this job."""
+    queries = session.query(SearchQuery).filter(SearchQuery.job_id == job_id).all()
+    return [
+        {"query_text": q.query_text, "status": q.status, "entities": q.entities_used}
+        for q in queries
+    ]
 
 
 @register_handler("verification_not_found")
@@ -33,7 +43,7 @@ class VerificationNotFoundHandler(Handler):
         """Execute verification not found handler.
         
         - Stores verification result as not found in verification_results table
-        - Updates job status to COMPLETED
+        - Updates job status to COMPLETED with full conclusion data
         - Returns result for UI
         """
         try:
@@ -49,10 +59,17 @@ class VerificationNotFoundHandler(Handler):
             
             # Get verification result for explanation (if available)
             verification_result = job_metadata.get("verification_result", {})
-            explanation = verification_result.get("explanation", "No connection found after exhausting all search strategies")
+            explanation = verification_result.get(
+                "explanation",
+                "No connection found after exhausting all search strategies"
+            )
             
             # Store result in database
             with Session(engine) as session:
+                # Collect papers fetched for this job (for conclusion)
+                fetched_papers = get_job_papers(job_id, session)
+                search_queries_used = _get_search_queries(job_id, session)
+
                 # Create verification result record
                 vr = VerificationResult(
                     job_id=job_id,
@@ -79,13 +96,25 @@ class VerificationNotFoundHandler(Handler):
                         "connection_type": None,
                         "explanation": explanation,
                         "reason": "No connection found after exhausting all search strategies",
+                        # All papers fetched during search — shows what was checked
+                        "fetched_papers": fetched_papers,
+                        "fetched_papers_count": len(fetched_papers),
+                        # Queries used to search
+                        "search_queries": search_queries_used,
                         "completed_at": datetime.utcnow().isoformat(),
                     }
                     session.commit()
-                    logger.info(f"Job {job_id} verification NOT FOUND: {source} -> {target}")
+                    logger.info(
+                        f"Job {job_id} verification NOT FOUND: {source} -> {target}, "
+                        f"{len(fetched_papers)} papers checked, none established a connection"
+                    )
                 else:
                     logger.warning(f"Job {job_id} not found for status update")
                     session.rollback()
+                    return HandlerResult(
+                        status="error",
+                        message=f"Job {job_id} not found",
+                    )
             
             final_output = {
                 "job_id": job_id,
@@ -93,7 +122,11 @@ class VerificationNotFoundHandler(Handler):
                 "source": source,
                 "target": target,
                 "connection_found": False,
+                "explanation": explanation,
                 "reason": "No connection found after exhausting all search strategies",
+                "fetched_papers": fetched_papers,
+                "fetched_papers_count": len(fetched_papers),
+                "search_queries": search_queries_used,
                 "completed_at": datetime.utcnow().isoformat(),
             }
             
@@ -105,7 +138,7 @@ class VerificationNotFoundHandler(Handler):
             )
         
         except Exception as e:
-            logger.error(f"VerificationNotFoundHandler failed for job {job_id}: {e}")
+            logger.error(f"VerificationNotFoundHandler failed for job {job_id}: {e}", exc_info=True)
             return HandlerResult(
                 status="error",
                 message=f"Failed to complete verification: {str(e)}",

@@ -16,6 +16,8 @@
     },
     "algorithm": {
         "decision_thresholds": {
+            "top_k_hypotheses_to_store": 5,
+            "abstract_snippet_length": 300,
             "confidence_norm_factor": 10,
             "high_confidence_threshold": 0.7,
             "dominant_gap_ratio": 0.3,
@@ -23,14 +25,13 @@
             "diversity_ratio_threshold": 0.3,
             "sparse_graph_density_threshold": 0.05,
             "path_support_threshold": 2,
-            "stability_cycle_threshold": 3,
+            "stability_cycle_threshold": 4,
             "min_absolute_growth_threshold": 0.5,
             "min_relative_growth_threshold": 0.1,
             "passed_to_total_ratio_threshold": 0.2,
             "minimum_hypotheses_threshold": 1,
             "semantic_similarity_threshold": 0.7
         },
-
         "extraction": {
             "whitelisted_regions": [
                 "abstract",
@@ -86,11 +87,8 @@
         "domain_resolution": {
             "allowed_domains": [
                 "biomedical",
-                "computer_science",
-                "physics",
-                "chemistry",
-                "mathematics",
-                "engineering"
+                "computer science",
+                "None"
             ],
             "llm_order": [
                 "nvidia"

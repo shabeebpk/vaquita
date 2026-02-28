@@ -347,6 +347,16 @@ class FetchService:
                 if not candidates:
                     logger.info(f"FetchService: No papers found for {origin} lead {search_query.id}")
                     update_search_query_status(search_query, session)  # mark done only after successful fetch
+                    
+                    # Log an empty run so the system knows an attempt was made
+                    record_search_run(
+                        search_query=search_query,
+                        job_id=job_id,
+                        provider_used=provider_name,
+                        reason=reason,
+                        session=session,
+                        config=query_config
+                    )
                     session.commit()
                     continue
 
@@ -425,15 +435,13 @@ class FetchService:
                 
             try:
                 results = provider.fetch(search_query.query_text, limit)
-                if results:
-                    return results, name
-                logger.debug(f"FetchService: Provider '{name}' returned no results for query '{search_query.id}'")
+                # Provider succeeded, return immediately
+                return results, name
             except Exception as e:
                 logger.error(f"FetchService: Provider '{name}' failed: {e}")
                 errors.append(f"{name}: {str(e)}")
 
         if errors:
-            # If they all failed (raised exception), but returned zero or we caught them:
             if not any(self.providers.get(n) for n in provider_order):
                 raise FetchServiceError(f"No active providers available for domain '{domain}'")
             raise FetchServiceError(f"All providers failed for domain '{domain}': {'; '.join(errors)}")

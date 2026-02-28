@@ -9,7 +9,7 @@ Provides functions to persist hypothesis rows with versioning:
 """
 from datetime import datetime
 import logging
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Any
 
 from sqlalchemy.orm import Session
 from app.storage.db import engine
@@ -234,3 +234,225 @@ def create_reasoning_query(job_id: int, query_text: str) -> int:
         session.commit()
         session.refresh(rq)
         return rq.id
+
+
+def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Optional[int] = None) -> Dict:
+    """
+    Project hypotheses into a plottable graph structure.
+    
+    Constraints:
+    - Never artificially connect 'source' and 'target' directly unless the path is a 1-hop edge.
+    - Edges are extracted strictly from the 'path' and 'predicates' arrays.
+    - For each edge in the path, lookup the underlying structural evidence from the semantic graph.
+    - Resolve DB source_ids (e.g., paper:123) into actual paper titles/urls for rich edge details.
+    
+    Args:
+        job_id: The job ID.
+        semantic_graph: The full semantic graph dict (to lookup full edge evidence).
+        version: Specific hypothesis version to load. If None, loads all active hypotheses.
+        
+    Returns:
+        Dict: {"nodes": [...], "edges": [...]} suitable for UI rendering.
+    """
+    from app.storage.models import Paper, IngestionSource
+    
+    # 1. Fetch hypotheses
+    with Session(engine) as session:
+        query = session.query(Hypothesis).filter(Hypothesis.job_id == job_id)
+        if version is not None:
+            query = query.filter(Hypothesis.version == version)
+        else:
+            query = query.filter(Hypothesis.is_active == True)
+            
+        hypotheses = query.all()
+        
+    if not hypotheses:
+        return {"nodes": [], "edges": []}
+
+    # 2. Build quick-lookup for semantic edges
+    # Semantic graph format: edges = [{"source": "A", "target": "B", "predicate": "P", "source_ids": ["paper:1"], ...}]
+    # Index semantic edges by (source, target) pairs, ignoring predicate for lookup
+    sem_edges_by_pair = {}
+    for edge in semantic_graph.get("edges", []):
+        s = getattr(edge.get("source"), "lower", lambda: str(edge.get("source")))()
+        t = getattr(edge.get("target"), "lower", lambda: str(edge.get("target")))()
+        if s and t:
+            if (s, t) not in sem_edges_by_pair:
+                sem_edges_by_pair[(s, t)] = []
+            sem_edges_by_pair[(s, t)].append(edge)
+
+    # 3. Collect all needed source_ids (to bulk query DB for metadata)
+    needed_source_refs = set()
+    for h in hypotheses:
+        needed_source_refs.update(h.source_ids or [])
+
+    # 4. Resolve DB papers/sources
+    source_metadata = {}
+    if needed_source_refs:
+        paper_ids = [int(str(sid).split(":")[1]) for sid in needed_source_refs if str(sid).startswith("paper:")]
+        if paper_ids:
+            with Session(engine) as session:
+                papers = session.query(Paper).filter(Paper.id.in_(paper_ids)).all()
+                for p in papers:
+                    source_metadata[f"paper:{p.id}"] = {
+                        "type": "paper",
+                        "id": p.id,
+                        "title": p.title,
+                        "url": p.pdf_url or p.doi,
+                        "year": p.year
+                    }
+
+    # 5. Build projected nodes and edges
+    projected_nodes = {}
+    projected_edges = {}
+
+    for h in hypotheses:
+        path = h.path or []
+        
+        # Add nodes
+        for node_str in path:
+            if node_str not in projected_nodes:
+                projected_nodes[node_str] = {"id": node_str, "label": node_str}
+
+        # Add edges strictly following the path
+        if len(path) > 1:
+            for i in range(len(path) - 1):
+                u = path[i]
+                v = path[i+1]
+                
+                u_lower = getattr(u, "lower", lambda: str(u))()
+                v_lower = getattr(v, "lower", lambda: str(v))()
+                
+                # Check both forward and reverse directions for associated edges
+                matching_edges = sem_edges_by_pair.get((u_lower, v_lower), [])
+                if not matching_edges:
+                    matching_edges = sem_edges_by_pair.get((v_lower, u_lower), [])
+                
+                # If we have matches, use the first predicate as a label, but union all sources
+                p = matching_edges[0].get("predicate", "related_to") if matching_edges else "related_to"
+                
+                edge_key = (u, v, p)
+                if edge_key not in projected_edges:
+                    # Union full evidence from all semantic graph edges between these nodes
+                    edge_source_ids = set()
+                    triple_ids = set()
+                    
+                    for edge in matching_edges:
+                        edge_source_ids.update(edge.get("source_ids", []))
+                        triple_ids.update(edge.get("triple_ids", []))
+                    
+                    # Attach resolved metadata
+                    rich_sources = []
+                    for sid in edge_source_ids:
+                        if sid in source_metadata:
+                            rich_sources.append(source_metadata[sid])
+                        else:
+                            rich_sources.append({"type": "unknown", "ref": sid})
+                    
+                    projected_edges[edge_key] = {
+                        "source": u,
+                        "target": v,
+                        "predicate": p,
+                        "source_ids": list(edge_source_ids),
+                        "source_metadata": rich_sources,
+                        "triple_ids": list(triple_ids),
+                        # Track which hypotheses use this edge
+                        "used_in_hypotheses": [h.id]
+                    }
+                else:
+                    if h.id not in projected_edges[edge_key]["used_in_hypotheses"]:
+                        projected_edges[edge_key]["used_in_hypotheses"].append(h.id)
+
+    return {
+        "nodes": list(projected_nodes.values()),
+        "edges": list(projected_edges.values())
+    }
+
+
+def get_job_papers(job_id: int, session: Session) -> List[Dict[str, Any]]:
+    """Collect all papers fetched for this job from JobPaperEvidence."""
+    from app.storage.models import JobPaperEvidence, Paper
+    from app.config.admin_policy import admin_policy
+    
+    rows = (
+        session.query(JobPaperEvidence, Paper)
+        .join(Paper, JobPaperEvidence.paper_id == Paper.id)
+        .filter(JobPaperEvidence.job_id == job_id)
+        .all()
+    )
+    papers = []
+    
+    # Get config for snippet length, fallback to 300
+    snippet_len = admin_policy.algorithm.decision_thresholds.abstract_snippet_length
+    
+    for evidence, paper in rows:
+        papers.append({
+            "paper_id": paper.id,
+            "title": paper.title,
+            "url": paper.pdf_url or paper.doi,
+            "abstract_snippet": (paper.abstract or "")[:snippet_len] if paper.abstract else None,
+            "evaluated": evidence.evaluated,
+            "impact_score": evidence.impact_score
+        })
+    return papers
+
+
+def group_top_hypotheses(hypotheses: List[Dict], limit: int) -> List[Dict]:
+    """
+    Group passed hypotheses by (source, target) pair.
+    For each pair, collect indirect paths, max confidence, and total support.
+    Returns the top `limit` pairs sorted by confidence.
+    """
+    pairs = {}
+    
+    # Only consider hypotheses that passed the structural filters
+    passed = [h for h in hypotheses if h.get("passed_filter", False)]
+    
+    for h in passed:
+        src = h.get("source")
+        tgt = h.get("target")
+        if not src or not tgt:
+            continue
+            
+        pair_key = (src, tgt)
+        if pair_key not in pairs:
+            pairs[pair_key] = {
+                "source": src,
+                "target": tgt,
+                "max_confidence": 0,
+                "indirect_paths": [],
+                "total_supporting_papers": set(),
+                "mode": h.get("mode", "explore"),
+                "domain": h.get("domain", "")
+            }
+            
+        # Update max confidence
+        conf = h.get("confidence", 0)
+        if conf > pairs[pair_key]["max_confidence"]:
+            pairs[pair_key]["max_confidence"] = conf
+            
+        # Add path details
+        pairs[pair_key]["indirect_paths"].append({
+            "hypothesis_id": h.get("id"),
+            "path": h.get("path", []),
+            "predicates": h.get("predicates", []),
+            "confidence": conf,
+            "explanation": h.get("explanation", "")
+        })
+        
+        # Aggregate paper support
+        for sid in h.get("source_ids", []):
+            if str(sid).startswith("paper:"):
+                pairs[pair_key]["total_supporting_papers"].add(str(sid))
+                
+    # Format and sort
+    results = []
+    for pair_data in pairs.values():
+        pair_data["total_supporting_papers_count"] = len(pair_data["total_supporting_papers"])
+        pair_data["total_supporting_papers"] = list(pair_data["total_supporting_papers"])
+        # Sort paths within the pair by confidence
+        pair_data["indirect_paths"].sort(key=lambda x: x["confidence"], reverse=True)
+        results.append(pair_data)
+        
+    results.sort(key=lambda x: x["max_confidence"], reverse=True)
+    return results[:limit]
