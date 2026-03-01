@@ -172,6 +172,18 @@ class DownloaderConfig(BaseModel):
     """Number of papers to download and ingest per cycle for 'Evenly Cooked' growth."""
 
 
+class PresentationConfig(BaseModel):
+    """Configuration for the presentation worker (LLM-based SSE narration)."""
+    llm_order: List[str] = Field(default_factory=list)
+    """Ordered list of LLM providers to try for presentation narration."""
+    prompt_assets: Dict[str, str] = Field(default_factory=dict)
+    """Map of phase key (e.g. 'DECISION_haltconfident') to prompt filename."""
+    temperature: float = 0.4
+    """Temperature for presentation LLM calls."""
+    max_tokens: int = 300
+    """Max tokens for presentation LLM calls."""
+
+
 class SentenceTransformerConfig(BaseModel):
     """Sentence Transformers embedding model configuration."""
     model_name: str = "all-MiniLM-L6-v2"
@@ -291,6 +303,7 @@ class AdminPolicy(BaseModel):
     decision_provider: str = "rule_based"
     graph_rules: GraphRules = Field(default_factory=GraphRules)
     downloader: DownloaderConfig = Field(default_factory=DownloaderConfig)
+    presentation: PresentationConfig = Field(default_factory=PresentationConfig)
 
     @field_validator('algorithm')
     @classmethod

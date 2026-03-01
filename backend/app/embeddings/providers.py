@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 class SentenceTransformerProvider(EmbeddingProvider):
     """Embedding provider using sentence-transformers library."""
 
+    _model_cache = {}
+    
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", batch_size: int = 32, device: str = "cpu"):
         """Initialize the provider.
 
@@ -31,12 +33,17 @@ class SentenceTransformerProvider(EmbeddingProvider):
         self.batch_size = batch_size
         self.device = device
 
-        try:
-            self.model = SentenceTransformer(model_name, device=device)
-            logger.info(f"Loaded SentenceTransformer model: {model_name} on device {device}")
-        except Exception as e:
-            logger.error(f"Failed to load SentenceTransformer model {model_name}: {e}")
-            raise
+        cache_key = f"{model_name}:{device}"
+        if cache_key not in self._model_cache:
+            try:
+                logger.info(f"Loading SentenceTransformer model for the first time: {model_name} on {device}")
+                self._model_cache[cache_key] = SentenceTransformer(model_name, device=device)
+                logger.info(f"Loaded SentenceTransformer model: {model_name} on device {device}")
+            except Exception as e:
+                logger.error(f"Failed to load SentenceTransformer model {model_name}: {e}")
+                raise
+        
+        self.model = self._model_cache[cache_key]
 
     def embed(self, texts: List[str]) -> np.ndarray:
         """Embed texts using sentence-transformers.

@@ -72,13 +72,18 @@ def compute_measurements(
             total_created = len(hierarchy_queries)
             total_done = sum(1 for q in hierarchy_queries if q.status == "done")
             any_new = any(q.status == "new" for q in hierarchy_queries)
+            
+            # UNIQUE check: how many distinct queries are actually possible in this hierarchy?
+            # If source == target, unique_hierarchy_count will be less than 3.
+            unique_hierarchy_count = len(set(hierarchy_hashes))
 
         # Complete = at least one query was created, none still 'new',
-        # AND all 3 hierarchy levels have been tried (all created == 3)
+        # AND all possible unique hierarchy levels have been tried
         verification_complete = (
-            total_created == 3 and not any_new
+            total_created >= unique_hierarchy_count and not any_new
         )
         measurements["verification_complete"] = verification_complete
+        measurements["verification_hierarchy_total_possible"] = unique_hierarchy_count
         measurements["verification_hierarchy_created"] = total_created
         measurements["verification_hierarchy_done"] = total_done
         vr = job_metadata.get("verification_result") or {}

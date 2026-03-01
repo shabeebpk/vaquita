@@ -21,20 +21,19 @@ class ResearchSeedHandler(ClassifierHandler):
         domain = payload.get("domain")
         topic = payload.get("topic", "General Research")
         
-        if not entities or len(entities) < 2:
-            logger.warning(f"ResearchSeedHandler: Insufficient entities found in seed for job {job_id}")
+        if not entities and not topic:
+            logger.warning(f"ResearchSeedHandler: No entities or topic found in seed for job {job_id}")
             return ClassifierHandlerResult(
                 status="insufficient_data",
-                message="Please provide at least two entities to link (e.g., A and B).",
+                message="Please provide a valid research topic or entities.",
                 action_taken="rejected_seed",
                 next_step="request_clarification"
             )
 
         # 1. Determine Endpoints vs Focus Areas
-        # A -> B -> C -> D
-        # Source: A, Target: D, Focus: [B, C]
-        source = entities[0]
-        target = entities[-1]
+        # Use first entity as source, last as target. If only 1, use topic as target.
+        source = entities[0] if len(entities) > 0 else topic
+        target = entities[-1] if len(entities) > 1 else topic
         focus_areas = entities[1:-1] if len(entities) > 2 else []
         
         logger.info(f"Seed Ignition: {source} -> {target} (Focus: {focus_areas}) for Job {job_id}")
@@ -53,7 +52,8 @@ class ResearchSeedHandler(ClassifierHandler):
             hypo_dict,
             job_id,
             session,
-            focus_areas=focus_areas
+            focus_areas=focus_areas,
+            entities=entities
         )
         
         # 3. Flip Job Status to ignite the Fetch Pipeline

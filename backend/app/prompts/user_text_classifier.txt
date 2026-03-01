@@ -21,49 +21,30 @@ Your task is to classify user input into exactly ONE of following categories and
 ## Few-Shot Examples
 
 Input: "Does Caffeine help headaches?"
-Output: { "label": "RESEARCH_SEED", "payload": { "topic": "Caffeine and headaches", "entities": ["Caffeine", "Headaches"], "domain": "biomedical", "raw_text": "Does Caffeine help headaches?" } }
+Output: RESEARCH_SEED | Does Caffeine help headaches? | biomedical | Caffeine, Headaches
 
 Input: "How are you today?"
-Output: { "label": "CONVERSATIONAL", "payload": { "answer": "I'm doing well, ready to help with your research. What topic are we exploring?" } }
+Output: CONVERSATIONAL | I'm doing well, ready to help with your research. What topic are we exploring?
 
 Input: "Check if sugar causes inflammation"
-Output: { "label": "RESEARCH_SEED", "payload": { "topic": "Sugar and inflammation", "entities": ["Sugar", "Inflammation"], "domain": "biomedical", "raw_text": "Check if sugar causes inflammation" } }
+Output: RESEARCH_SEED | Check if sugar causes inflammation | biomedical | Sugar, Inflammation
 
 Input: "What is this tool used for?"
-Output: { "label": "CONVERSATIONAL", "payload": { "answer": "This is an iterative literature review tool that builds a knowledge graph from research papers." } }
+Output: CONVERSATIONAL | This is an iterative literature review tool that builds a knowledge graph from research papers.
 
-## Output Format (STRICT JSON ONLY)
+## Output Format (STRICT PIPE NOTATION ONLY)
 
-You must return ONLY a JSON object. No prose. No markdown blocks.
+You must return ONLY a single line. No JSON. No markdown blocks.
 
-### JSON Schema
+For RESEARCH_SEED (Label | Query Text | Domain | Entities comma-separated):
+RESEARCH_SEED | <user query> | <domain> | <entity1, entity2, ...>
 
-{
-  "label": "RESEARCH_SEED" | "EVIDENCE_INPUT" | "CONVERSATIONAL",
-  "payload": {
-    /* Label specific keys */
-  }
-}
+For EVIDENCE_INPUT (Label | empty):
+EVIDENCE_INPUT | 
 
-### Payload Schemas (Always include all keys, even if null)
+For CONVERSATIONAL (Label | Answer):
+CONVERSATIONAL | <answer>
 
-#### RESEARCH_SEED
-{
-  "topic": string | null,
-  "entities": [string],
-  "domain": {allowed_domains},
-  "raw_text": string
-}
-
-#### EVIDENCE_INPUT
-{
-  "raw_text": null
-}
-
-#### CONVERSATIONAL
-{
-  "answer": string
-}
 
 ## Critical Rules
 

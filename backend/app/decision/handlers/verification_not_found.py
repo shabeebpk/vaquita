@@ -15,6 +15,7 @@ from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
 from app.storage.models import Job, VerificationResult, JobPaperEvidence, Paper, SearchQuery
 from app.path_reasoning.persistence import get_job_papers
+from presentation.events import push_presentation_event
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +110,32 @@ class VerificationNotFoundHandler(Handler):
                         f"{len(fetched_papers)} papers checked, none established a connection"
                     )
                 else:
-                    logger.warning(f"Job {job_id} not found for status update")
+                    logger.info(f"Job {job_id} marked COMPLETED (Verification Not Found) by VerificationNotFoundHandler")
                     session.rollback()
                     return HandlerResult(
                         status="error",
                         message=f"Job {job_id} not found",
                     )
+            
+            # Emit presentation event
+            # Note: The provided snippet uses 'source_query', 'target_query', 'final_evidence'
+            # which are not defined in this handler. Using 'source', 'target', 'fetched_papers' instead.
+            # Emit presentation event
+            push_presentation_event(
+                job_id=job_id,
+                phase="DECISION",
+                status="notfound",
+                result={
+                    "source": source,
+                    "target": target,
+                    "verification_result": "No connection found",
+                    "papers_used": len(fetched_papers),
+                },
+                payload={
+                    "papers": fetched_papers,
+                    "explanation": explanation,
+                },
+            )
             
             final_output = {
                 "job_id": job_id,

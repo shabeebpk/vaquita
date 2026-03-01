@@ -156,7 +156,8 @@ class FetchService:
             s_query = get_or_create_search_query(
                 m_hypo, job_id, session,
                 focus_areas=focus_areas,
-                config=query_config
+                config=query_config,
+                entities=m_hypo.get("path")
             )
             all_targets.append(("machine", s_query))
 

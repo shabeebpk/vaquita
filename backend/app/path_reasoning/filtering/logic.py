@@ -258,20 +258,29 @@ def filter_hypotheses(
 def resolve_domains_batch(
     hypotheses: List[Dict],
     llm_client: Any,
+    job_domain: Optional[str] = None
 ) -> List[Dict]:
     """
     Resolve domains for hypotheses in batch by grouping on (source, target) pairs.
     
-    Groups hypotheses by (source, target), creates a single LLM prompt per group
-    with all intermediate paths, and applies the result to all hypotheses in the group.
+    If job_domain is provided (override), it is applied to all hypotheses immediately.
+    Otherwise, groups hypotheses by (source, target), creates a single LLM prompt 
+    per group with all intermediate paths, and applies the result.
     
     Args:
         hypotheses: List of filtered hypotheses
         llm_client: LLM client for domain resolution
+        job_domain: Optional domain override from job config
     
     Returns:
         Hypotheses with 'domain' field populated
     """
+    if job_domain:
+        logger.info(f"Using job override domain for batch: {job_domain}")
+        for hyp in hypotheses:
+            hyp["domain"] = job_domain
+        return hypotheses
+
     from app.config.admin_policy import admin_policy
     from app.prompts.loader import load_prompt
     

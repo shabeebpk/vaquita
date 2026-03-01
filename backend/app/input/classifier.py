@@ -100,53 +100,34 @@ class TextClassifier:
         logger.debug(f"Created metadata wrapper for input of length {len(text)}")
         return wrapper
 
-    def _extract_json(self, text: str) -> str:
-        """Robustly extract JSON from a potentially messy LLM response."""
-        text = text.strip()
-        
-        # 1. Look for JSON code blocks
-        if "```json" in text:
-            try:
-                content = text.split("```json")[1].split("```")[0].strip()
-                if content:
-                    return content
-            except IndexError:
-                pass
-        elif "```" in text:
-            try:
-                content = text.split("```")[1].split("```")[0].strip()
-                if content:
-                    return content
-            except IndexError:
-                pass
+    def _clean_pipe_element(self, element: str) -> str:
+        """Strip whitespace, quotes, and newlines from a pipe element."""
+        element = element.strip()
+        if (element.startswith('"') and element.endswith('"')) or (element.startswith("'") and element.endswith("'")):
+            element = element[1:-1]
+        return element.strip()
 
-        # 2. Fallback: Find the first '{' and last '}'
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            return text[start:end+1]
-            
-        return text
-
-    def _repair_json(self, text: str) -> str:
-        """Attempt to repair common LLM JSON mistakes (like unquoted keys)."""
-        import re
-        if not text:
-            return text
-            
-        # 0. Ensure outer braces exist if we see a label
-        if "label" in text and not text.strip().startswith("{"):
-            text = "{" + text.strip() + "}"
-            
-        # 1. Wrap unquoted keys in double quotes. 
-        # Pattern matches: marker({ or , or whitespace or start), then a word(\w+), then a colon(:)
-        # We use a lookbehind/lookahead style approach for robustness
-        repaired = re.sub(r'([{,\s])(\w+)(\s*:)', r'\1"\2"\3', text)
+    def _parse_pipe_format(self, text: str) -> dict:
+        """Parse the label | value | domain | entities format."""
+        # Find the first line that contains a pipe
+        lines = [line for line in text.split('\n') if '|' in line]
+        line = lines[-1] if lines else text
         
-        # 2. Fix trailing commas in objects/arrays (common LLM mistake)
-        repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+        parts = [self._clean_pipe_element(p) for p in line.split('|')]
         
-        return repaired
+        label_name = parts[0].upper() if len(parts) > 0 else "CONVERSATIONAL"
+        payload = {}
+        
+        if label_name == "RESEARCH_SEED":
+            payload["topic"] = parts[1] if len(parts) > 1 else ""
+            payload["domain"] = parts[2] if len(parts) > 2 else ""
+            
+            entities_str = parts[3] if len(parts) > 3 else ""
+            payload["entities"] = [e.strip() for e in entities_str.split(',') if e.strip()]
+        elif label_name == "CONVERSATIONAL":
+            payload["answer"] = parts[1] if len(parts) > 1 else ""
+            
+        return {"label": label_name, "payload": payload}
 
     def classify(self, text: str, job_id: Optional[int] = None, session: Any = None) -> ClassificationResult:
         """
@@ -179,17 +160,8 @@ class TextClassifier:
             response_text = self.llm.generate(prompt).strip()
             logger.info(f"LLM Raw Response: {response_text}")
             
-            # Robust JSON extraction
-            cleaned_json = self._extract_json(response_text)
-            
-            try:
-                parsed = json.loads(cleaned_json)
-            except json.JSONDecodeError:
-                # Attempt Repair
-                logger.info("JSON parsing failed. Attempting repair...")
-                repaired = self._repair_json(cleaned_json)
-                logger.debug(f"Repaired JSON: {repaired}")
-                parsed = json.loads(repaired)
+            # Robust Pipe extraction
+            parsed = self._parse_pipe_format(response_text)
             
             label_name = parsed.get("label", "CONVERSATIONAL").upper()
             payload = parsed.get("payload", {})

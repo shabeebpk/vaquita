@@ -14,6 +14,7 @@ from app.decision.handlers.base import Handler, HandlerResult
 from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
 from app.storage.models import Job
+from presentation.events import push_presentation_event
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,34 @@ class InsufficientSignalHandler(Handler):
                 },
             }
             
+            # 1. Group and rank hypotheses (including promising)
+            from app.config.admin_policy import admin_policy
+            from app.path_reasoning.persistence import group_top_hypotheses
+            limit = admin_policy.algorithm.decision_thresholds.top_k_hypotheses_to_store
+            ranked_pairs = group_top_hypotheses(hypotheses, limit=limit)
+
             logger.info(f"Job {job_id} marked insufficient signal: {explanation}")
+            
+            # Emit presentation event
+            push_presentation_event(
+                job_id=job_id,
+                phase="DECISION",
+                status="insufficientsignal",
+                result={
+                    "graph_size": semantic_graph.get("node_count", 0) if semantic_graph else 0,
+                    "edge_count": semantic_graph.get("edge_count", 0) if semantic_graph else 0,
+                    "hypothesis_count": measurements.get("passed_hypothesis_count", 0),
+                    "growth_score": measurements.get("growth_score", 0),
+                    "explanation": explanation,
+                },
+                metric={
+                    "next_step": "need inputs",
+                },
+                payload={
+                    "top_k_hypotheses": ranked_pairs,
+                },
+                next_action="need_inputs",
+            )
             
             return HandlerResult(
                 status="deferred",

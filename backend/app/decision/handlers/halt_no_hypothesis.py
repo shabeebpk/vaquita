@@ -17,6 +17,7 @@ from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
 from app.storage.models import Job, JobPaperEvidence, Paper
 from app.path_reasoning.persistence import project_hypotheses_to_graph, get_job_papers, group_top_hypotheses
+from presentation.events import push_presentation_event
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,11 @@ class HaltNoHypothesisHandler(Handler):
 
             # 1. Group and rank hypotheses (there is no 'dominant' here, only alternatives)
             limit = admin_policy.algorithm.decision_thresholds.top_k_hypotheses_to_store
-            top_k_pairs = group_top_hypotheses(hypotheses, limit=limit)
+            ranked_pairs = group_top_hypotheses(hypotheses, limit=limit)
             
             # 2. Get active hypothesis version and measurements snapshot
             hypo_version = hypotheses[0].get("version", 1) if hypotheses else 1
+            measurements = decision_result.get("measurements", {})
             total_cycles = measurements.get("decision_cycle_count", 1)
             
             # 3. Generate projected graph from active hypotheses
@@ -73,7 +75,7 @@ class HaltNoHypothesisHandler(Handler):
                 "status": "completed",
                 "conclusion": "No Hypothesis Found (Stagnant/Ambiguous)",
                 "reason": reason,
-                "top_k_alternatives": top_k_pairs,  # In missing-dominant case, provide the runner-ups
+                "top_k_alternatives": ranked_pairs,  # In missing-dominant case, provide the runner-ups
                 "metrics": {
                     "last_graph_version": semantic_graph.get("version", 1),
                     "hypothesis_version": hypo_version,
@@ -98,6 +100,25 @@ class HaltNoHypothesisHandler(Handler):
                     logger.warning(f"Job {job_id} not found for status update")
             
             logger.info(f"Job {job_id} halted: no hypothesis paths. {reason}")
+            
+            # Emit presentation event
+            push_presentation_event(
+                job_id=job_id,
+                phase="DECISION",
+                status="nohypo",
+                result={
+                    "conclusion": final_output.get("conclusion", "No Hypothesis Found"),
+                    "reason": final_output.get("reason", ""),
+                    "top_k_count": len(ranked_pairs),
+                    "papers_used": final_output.get("fetched_papers_count", 0),
+                    "total_cycles": final_output.get("metrics", {}).get("total_cycles", 1),
+                },
+                metric=final_output.get("metrics", {}).get("measurements_snapshot"),
+                payload={
+                    "top_k_hypotheses": ranked_pairs,
+                    "papers": final_output.get("fetched_papers", []),
+                },
+            )
             
             return HandlerResult(
                 status="ok",

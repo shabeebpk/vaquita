@@ -14,6 +14,7 @@ from app.decision.handlers.base import Handler, HandlerResult
 from app.decision.handlers.registry import register_handler
 from app.storage.db import engine
 from app.storage.models import Job, VerificationResult, JobPaperEvidence, Paper, SearchQuery
+from presentation.events import push_presentation_event
 from app.path_reasoning.persistence import get_job_papers
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,15 @@ class VerificationFoundHandler(Handler):
                 # Collect papers fetched for this job (for conclusion)
                 fetched_papers = get_job_papers(job_id, session)
                 search_queries_used = _get_search_queries(job_id, session)
+                
+                # Resolve evidence snippets for the verification path terminal output
+                from app.path_reasoning.persistence import resolve_triple_evidence_text
+                path_triple_ids = []
+                for paper_data in path_evidence:
+                    ids = paper_data.get("triple_ids", [])
+                    path_triple_ids.extend(ids)
+                
+                final_evidence = resolve_triple_evidence_text(list(set(path_triple_ids)), session)
 
                 # Create verification result record
                 vr = VerificationResult(
@@ -100,6 +110,8 @@ class VerificationFoundHandler(Handler):
                         # All papers fetched during this job's search phase
                         "fetched_papers": fetched_papers,
                         "fetched_papers_count": len(fetched_papers),
+                        # Evidence snippets from TextBlocks
+                        "final_evidence": final_evidence,
                         # Queries used to search
                         "search_queries": search_queries_used,
                         "completed_at": datetime.utcnow().isoformat(),
@@ -116,6 +128,26 @@ class VerificationFoundHandler(Handler):
                         status="error",
                         message=f"Job {job_id} not found",
                     )
+            
+            # Emit presentation event
+            push_presentation_event(
+                job_id=job_id,
+                phase="DECISION",
+                status="found",
+                result={
+                    "source": source,
+                    "target": target,
+                    "verification_result": connection_type,
+                    "papers_used": len(path_evidence),
+                    "final_evidence": "\n\n".join(final_evidence[:5]), # Send snippets for narration
+                },
+                payload={
+                    "papers": fetched_papers,
+                    "path": path,
+                    "explanation": explanation,
+                    "evidence_snippets": final_evidence,
+                },
+            )
             
             final_output = {
                 "job_id": job_id,

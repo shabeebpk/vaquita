@@ -270,16 +270,16 @@ def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Opti
         return {"nodes": [], "edges": []}
 
     # 2. Build quick-lookup for semantic edges
-    # Semantic graph format: edges = [{"source": "A", "target": "B", "predicate": "P", "source_ids": ["paper:1"], ...}]
-    # Index semantic edges by (source, target) pairs, ignoring predicate for lookup
+    # Semantic graph format: edges = [{"subject": "A", "object": "B", "predicate": "P", "source_ids": ["paper:1"], ...}]
+    # Index semantic edges by (subject, object) pairs, ignoring predicate for lookup
     sem_edges_by_pair = {}
     for edge in semantic_graph.get("edges", []):
-        s = getattr(edge.get("source"), "lower", lambda: str(edge.get("source")))()
-        t = getattr(edge.get("target"), "lower", lambda: str(edge.get("target")))()
-        if s and t:
-            if (s, t) not in sem_edges_by_pair:
-                sem_edges_by_pair[(s, t)] = []
-            sem_edges_by_pair[(s, t)].append(edge)
+        s = getattr(edge.get("subject"), "lower", lambda: str(edge.get("subject")))().strip()
+        o = getattr(edge.get("object"), "lower", lambda: str(edge.get("object")))().strip()
+        if s and o:
+            if (s, o) not in sem_edges_by_pair:
+                sem_edges_by_pair[(s, o)] = []
+            sem_edges_by_pair[(s, o)].append(edge)
 
     # 3. Collect all needed source_ids (to bulk query DB for metadata)
     needed_source_refs = set()
@@ -289,18 +289,68 @@ def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Opti
     # 4. Resolve DB papers/sources
     source_metadata = {}
     if needed_source_refs:
-        paper_ids = [int(str(sid).split(":")[1]) for sid in needed_source_refs if str(sid).startswith("paper:")]
-        if paper_ids:
-            with Session(engine) as session:
-                papers = session.query(Paper).filter(Paper.id.in_(paper_ids)).all()
+        from app.storage.models import Paper, File, TextBlock, IngestionSource, IngestionSourceType
+        
+        # 4a. Identity specific types
+        paper_ids = set()
+        file_ids = set()
+        block_ids = set()
+        
+        for sid in needed_source_refs:
+            s_sid = str(sid)
+            if s_sid.startswith("paper:"):
+                paper_ids.add(int(s_sid.split(":")[1]))
+            elif s_sid.startswith("file:"):
+                file_ids.add(int(s_sid.split(":")[1]))
+            elif s_sid.startswith("block:"):
+                block_ids.add(int(s_sid.split(":")[1]))
+
+        with Session(engine) as session:
+            # Resolve Blocks first (since they point to sources)
+            if block_ids:
+                blocks = session.query(TextBlock).filter(TextBlock.id.in_(list(block_ids))).all()
+                for b in blocks:
+                    # Map block to its ingestion source
+                    source = session.query(IngestionSource).get(b.ingestion_source_id)
+                    if source:
+                        if source.source_type == IngestionSourceType.USER_TEXT.value:
+                            source_metadata[f"block:{b.id}"] = {"type": "user_input", "title": "User provided text", "id": b.id}
+                        elif source.source_ref.startswith("paper:"):
+                            paper_ids.add(int(source.source_ref.split(":")[1]))
+                            # We'll resolve the paper title later and map it back
+                            source_metadata[f"block:{b.id}"] = {"type": "paper_ref", "ref": source.source_ref}
+                        elif source.source_ref.startswith("file:"):
+                            file_ids.add(int(source.source_ref.split(":")[1]))
+                            source_metadata[f"block:{b.id}"] = {"type": "file_ref", "ref": source.source_ref}
+
+            # Resolve Papers
+            if paper_ids:
+                papers = session.query(Paper).filter(Paper.id.in_(list(paper_ids))).all()
                 for p in papers:
-                    source_metadata[f"paper:{p.id}"] = {
+                    meta = {
                         "type": "paper",
-                        "id": p.id,
-                        "title": p.title,
+                        "title": f"Fetched paper: {p.title}",
                         "url": p.pdf_url or p.doi,
-                        "year": p.year
                     }
+                    source_metadata[f"paper:{p.id}"] = meta
+                    # Back-fill any blocks pointing to this paper
+                    for k, v in source_metadata.items():
+                        if v.get("type") == "paper_ref" and v.get("ref") == f"paper:{p.id}":
+                            source_metadata[k] = meta
+
+            # Resolve Files
+            if file_ids:
+                files = session.query(File).filter(File.id.in_(list(file_ids))).all()
+                for f in files:
+                    meta = {
+                        "type": "file",
+                        "title": f"Uploaded doc: {f.original_filename}",
+                    }
+                    source_metadata[f"file:{f.id}"] = meta
+                    # Back-fill any blocks pointing to this file
+                    for k, v in source_metadata.items():
+                        if v.get("type") == "file_ref" and v.get("ref") == f"file:{f.id}":
+                            source_metadata[k] = meta
 
     # 5. Build projected nodes and edges
     projected_nodes = {}
@@ -319,14 +369,13 @@ def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Opti
             for i in range(len(path) - 1):
                 u = path[i]
                 v = path[i+1]
-                
-                u_lower = getattr(u, "lower", lambda: str(u))()
-                v_lower = getattr(v, "lower", lambda: str(v))()
+                u_norm = str(u).strip().lower()
+                v_norm = str(v).strip().lower()
                 
                 # Check both forward and reverse directions for associated edges
-                matching_edges = sem_edges_by_pair.get((u_lower, v_lower), [])
+                matching_edges = sem_edges_by_pair.get((u_norm, v_norm), [])
                 if not matching_edges:
-                    matching_edges = sem_edges_by_pair.get((v_lower, u_lower), [])
+                    matching_edges = sem_edges_by_pair.get((v_norm, u_norm), [])
                 
                 # If we have matches, use the first predicate as a label, but union all sources
                 p = matching_edges[0].get("predicate", "related_to") if matching_edges else "related_to"
@@ -337,9 +386,9 @@ def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Opti
                     edge_source_ids = set()
                     triple_ids = set()
                     
-                    for edge in matching_edges:
-                        edge_source_ids.update(edge.get("source_ids", []))
-                        triple_ids.update(edge.get("triple_ids", []))
+                    for m_edge in matching_edges:
+                        edge_source_ids.update(m_edge.get("source_ids", []))
+                        triple_ids.update(m_edge.get("triple_ids", []))
                     
                     # Attach resolved metadata
                     rich_sources = []
@@ -347,7 +396,14 @@ def project_hypotheses_to_graph(job_id: int, semantic_graph: Dict, version: Opti
                         if sid in source_metadata:
                             rich_sources.append(source_metadata[sid])
                         else:
-                            rich_sources.append({"type": "unknown", "ref": sid})
+                            # Fallback descriptive labels
+                            s_sid = str(sid)
+                            if s_sid.startswith("paper"):
+                                rich_sources.append({"type": "paper", "title": "Fetched paper"})
+                            elif s_sid.startswith("file"):
+                                rich_sources.append({"type": "file", "title": "Uploaded doc"})
+                            else:
+                                rich_sources.append({"type": "user_text", "title": "User text"})
                     
                     projected_edges[edge_key] = {
                         "source": u,
@@ -397,62 +453,162 @@ def get_job_papers(job_id: int, session: Session) -> List[Dict[str, Any]]:
     return papers
 
 
-def group_top_hypotheses(hypotheses: List[Dict], limit: int) -> List[Dict]:
+def resolve_triple_evidence_text(triple_ids: List[int], session: Session) -> List[str]:
+    """Fetch raw text blocks for the given triple IDs.
+    
+    This is used to provide concrete evidence snippets in the final presentation.
     """
-    Group passed hypotheses by (source, target) pair.
-    For each pair, collect indirect paths, max confidence, and total support.
-    Returns the top `limit` pairs sorted by confidence.
+    from app.storage.models import Triple, TextBlock
+    if not triple_ids:
+        return []
+    
+    # Filter out non-integers if any
+    clean_ids = [tid for tid in triple_ids if isinstance(tid, int)]
+    if not clean_ids:
+        return []
+
+    # Triple -> TextBlock -> block_text
+    # We join Triple and TextBlock to ensure we only get text for the specific triples.
+    blocks = (
+        session.query(TextBlock.block_text)
+        .join(Triple, Triple.block_id == TextBlock.id)
+        .filter(Triple.id.in_(clean_ids))
+        .distinct()
+        .all()
+    )
+    return [b.block_text for b in blocks if b.block_text]
+
+
+def _extract_intermediates(path: list) -> list:
     """
+    Extract intermediate nodes from a hypothesis path.
+    
+    A path is [source, intermediate1, ..., intermediateN, target].
+    Intermediates are all nodes except the first and last.
+    
+    Example:
+        path = ["t", "j", "b"]  -> intermediates = ["j"]
+        path = ["a", "b", "c"]  -> intermediates = ["b"]
+    """
+    if not path or len(path) <= 2:
+        return []
+    return path[1:-1]
+
+
+def group_top_hypotheses(
+    hypotheses: List[Dict],
+    limit: int,
+    exclude_pair: tuple = None  # (source, target) of dominant pair to exclude from top-K
+) -> List[Dict]:
+    """
+    Group hypotheses by (source, target) pair, including both passed and promising.
+    
+    Scoring:
+    - Passed: 1.0 points
+    - Promising (low-confidence rejection only): 0.5 points
+    
+    For each pair, collects deduplicated intermediates from all paths.
+    
+    Returns top `limit` pairs sorted by pair_score desc, then max_confidence desc.
+    Each entry has: { source, target, intermediates }
+    """
+    from app.path_reasoning.filtering.logic import is_low_confidence_rejection
+    
     pairs = {}
     
-    # Only consider hypotheses that passed the structural filters
-    passed = [h for h in hypotheses if h.get("passed_filter", False)]
-    
-    for h in passed:
+    for h in hypotheses:
+        is_passed = h.get("passed_filter", False)
+        is_promising = is_low_confidence_rejection(h)
+        
+        if not (is_passed or is_promising):
+            continue
+            
         src = h.get("source")
         tgt = h.get("target")
         if not src or not tgt:
             continue
             
         pair_key = (src, tgt)
+        
+        # Skip excluded pair (dominant) if specified
+        if exclude_pair and pair_key == tuple(exclude_pair):
+            continue
+        
         if pair_key not in pairs:
             pairs[pair_key] = {
                 "source": src,
                 "target": tgt,
-                "max_confidence": 0,
-                "indirect_paths": [],
-                "total_supporting_papers": set(),
-                "mode": h.get("mode", "explore"),
-                "domain": h.get("domain", "")
+                "pair_score": 0.0,
+                "max_confidence": 0.0,
+                "intermediates_set": set(),  # deduplicated intermediate nodes
             }
-            
-        # Update max confidence
+        
+        # Accumulate score
+        score = 1.0 if is_passed else 0.5
+        pairs[pair_key]["pair_score"] += score
+        
+        # Track max confidence for sorting tiebreaks
         conf = h.get("confidence", 0)
         if conf > pairs[pair_key]["max_confidence"]:
             pairs[pair_key]["max_confidence"] = conf
-            
-        # Add path details
-        pairs[pair_key]["indirect_paths"].append({
-            "hypothesis_id": h.get("id"),
-            "path": h.get("path", []),
-            "predicates": h.get("predicates", []),
-            "confidence": conf,
-            "explanation": h.get("explanation", "")
-        })
         
-        # Aggregate paper support
-        for sid in h.get("source_ids", []):
-            if str(sid).startswith("paper:"):
-                pairs[pair_key]["total_supporting_papers"].add(str(sid))
-                
-    # Format and sort
+        # Collect intermediates from this path
+        path = h.get("path", [])
+        for node in _extract_intermediates(path):
+            if node:
+                pairs[pair_key]["intermediates_set"].add(node)
+    
+    # Build clean output list
     results = []
     for pair_data in pairs.values():
-        pair_data["total_supporting_papers_count"] = len(pair_data["total_supporting_papers"])
-        pair_data["total_supporting_papers"] = list(pair_data["total_supporting_papers"])
-        # Sort paths within the pair by confidence
-        pair_data["indirect_paths"].sort(key=lambda x: x["confidence"], reverse=True)
-        results.append(pair_data)
-        
-    results.sort(key=lambda x: x["max_confidence"], reverse=True)
-    return results[:limit]
+        results.append({
+            "source": pair_data["source"],
+            "target": pair_data["target"],
+            "intermediates": sorted(pair_data["intermediates_set"]),  # sorted for determinism
+            # Internal scoring fields for sorting (stripped before sending)
+            "_pair_score": pair_data["pair_score"],
+            "_max_confidence": pair_data["max_confidence"],
+        })
+    
+    # Sort by pair_score desc, then max_confidence desc
+    results.sort(key=lambda x: (-x["_pair_score"], -x["_max_confidence"]))
+    
+    # Return top-K, stripping internal scoring fields
+    output = []
+    for r in results[:limit]:
+        output.append({
+            "source": r["source"],
+            "target": r["target"],
+            "intermediates": r["intermediates"],
+        })
+    return output
+
+
+def get_dominant_pair(
+    hypotheses: List[Dict],
+    dominant_pair_ids: list,  # e.g. ["openai", "thought"]
+) -> Dict:
+    """
+    Build a clean {source, target, intermediates} entry for the dominant pair.
+    
+    Collects all intermediate nodes across every hypothesis for that (source, target) pair.
+    """
+    if not dominant_pair_ids or len(dominant_pair_ids) < 2:
+        return {}
+    
+    src, tgt = dominant_pair_ids[0], dominant_pair_ids[1]
+    intermediates_set = set()
+    
+    for h in hypotheses:
+        if h.get("source") == src and h.get("target") == tgt:
+            path = h.get("path", [])
+            for node in _extract_intermediates(path):
+                if node:
+                    intermediates_set.add(node)
+    
+    return {
+        "source": src,
+        "target": tgt,
+        "intermediates": sorted(intermediates_set),
+    }
+

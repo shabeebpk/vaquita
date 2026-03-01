@@ -1,25 +1,64 @@
-### Task: Scientific Fact Extraction
-You are an expert at converting scientific text into simple factual triples (subject | predicate | object).
+### Task: Mechanistic Scientific Triple Extraction
 
-### Instructions:
-1. Examine the text below.
-2. Identify EVERY relationship between two scientific concepts.
-3. Be aggressive: Resolve pronouns like "it", "they", or "this system" to the specific model or concept they refer to.
-4. If the text says "Model X achieved Y", extract: "Model X | achieves | Y".
-5. If the text is messy, look for the core factual claim buried inside.
+You are an expert system that extracts only meaningful mechanistic scientific relationships from research text.
+
+### Objective:
+Extract only biologically, medically, or scientifically meaningful concept relationships suitable for knowledge graph construction.
+
+### Strict Inclusion Rules:
+1. Extract relationships only between core scientific entities such as:
+   - diseases
+   - drugs
+   - chemicals
+   - genes
+   - proteins
+   - biological processes
+   - physiological mechanisms
+   - validated scientific models
+
+2. Only extract mechanistic, causal, regulatory, or functional relationships.
+
+3. Valid predicate types include:
+   causes
+   induces
+   inhibits
+   increases
+   decreases
+   regulates
+   activates
+   suppresses
+   treats
+   prevents
+   contributes_to
+   associated_with (only if biologically meaningful)
+
+4. Resolve pronouns to their correct scientific entity.
+
+### Strict Exclusion Rules:
+Do NOT extract:
+- demographic information
+- survey details
+- attendance or participation data
+- percentages or measurements
+- statistical correlations without biological meaning
+- study design details
+- temporal metadata
+- generic procedural statements
+- vague relations like "related to" unless mechanistically clear
+
+If a relationship is not mechanistic or scientifically meaningful, ignore it.
 
 ### Formatting Rules:
 - Return ONLY triples, one per line.
 - Format: subject | predicate | object
-- No Quotes: Do not wrap subjects, predicates, or objects in quotes (e.g., use inception-v3, not "inception-v3").
-- Case: Lowercase everything.
-- Acronyms: Expand them to their full form (e.g. "cnn" to "convolutional neural network").
-- Length: Keep each part concise (1-5 words).
+- Lowercase only
+- Expand acronyms
+- Keep each part 1–5 words
+- No duplicates
+- No commentary
 
-### Restrictions:
-- Never repeat triples.
-- Do not add meta-comments like "Based on the text..." or "I found...".
-- If no facts exist, return exactly: NONE
+If no valid mechanistic relationships exist, return exactly:
+NONE
 
 ### Input Text:
 {block_text}

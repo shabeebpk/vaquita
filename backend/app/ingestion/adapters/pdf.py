@@ -148,9 +148,14 @@ class PDFAdapter(BaseExtractionAdapter):
             
             page_chars = len(page_text)
             
-            # Stop if adding this page would exceed limit
+            # If adding this page exceeds limit, take partial and stop
             if accumulated_chars + page_chars > max_chars:
-                logger.info(f"PDFAdapter: Token limit reached after page {page_num}. Stopping fallback extraction.")
+                remaining_chars = int(max_chars - accumulated_chars)
+                if remaining_chars > 0:
+                    logger.info(f"PDFAdapter: Token limit reached on page {page_num}. Extracting remaining {remaining_chars} chars.")
+                    accumulated_text.append(page_text[:remaining_chars])
+                else:
+                    logger.info(f"PDFAdapter: Token limit reached BEFORE page {page_num}. Stopping.")
                 break
             
             accumulated_text.append(page_text)

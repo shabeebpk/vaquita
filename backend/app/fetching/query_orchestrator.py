@@ -79,7 +79,8 @@ def get_or_create_search_query(
     session: Session,
     query_text: str = "",
     focus_areas: list = None,
-    config: Optional[QueryOrchestratorConfig] = None
+    config: Optional[QueryOrchestratorConfig] = None,
+    entities: Optional[list] = None
 ) -> SearchQuery:
     """
     Get existing SearchQuery by hypothesis_signature or create new one.
@@ -91,6 +92,7 @@ def get_or_create_search_query(
         query_text: Optional custom query text (derived from hypothesis if empty)
         focus_areas: Optional list of keywords to inject into query (AND/OR logic)
         config: QueryOrchestratorConfig (created if None)
+        entities: Optional list of entities used in this search query
     
     Returns:
         SearchQuery model instance
@@ -135,6 +137,10 @@ def get_or_create_search_query(
         "timestamp": datetime.utcnow().isoformat()
     }
     
+    # Handle entities and hash
+    entities_used = entities or []
+    entities_hash = compute_entities_hash(entities_used) if entities_used else None
+    
     # Create new SearchQuery
     search_query = SearchQuery(
         job_id=job_id,
@@ -143,7 +149,9 @@ def get_or_create_search_query(
         resolved_domain=resolved_domain,
         status="new",
         reputation_score=config.initial_reputation,
-        config_snapshot=config_snapshot
+        config_snapshot=config_snapshot,
+        entities_used=entities_used,
+        entities_hash=entities_hash
     )
     
     session.add(search_query)

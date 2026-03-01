@@ -79,6 +79,10 @@ def is_impactful_node(text: str) -> bool:
     if not text or len(text) < 2:
         return False
         
+    # CRITICAL: Always check if the node is noise first
+    if classify_node(text) == "noise":
+        return False
+        
     # If it's all uppercase acronym (e.g., DNA, CRISPR, GPT)
     if text.isupper() and text.isalpha():
         return True

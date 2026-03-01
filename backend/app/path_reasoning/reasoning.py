@@ -394,6 +394,7 @@ def run_path_reasoning(
     stoplist: Optional[Set[str]] = None,
     preferred_predicates: Optional[List[str]] = None,
     preferred_predicate_boost_factor: float = 1.2,
+    job_domain: Optional[str] = None,
 ) -> List[Dict]:
     """Main entrypoint for Phase-4 reasoning (3-node paths only).
 
@@ -404,6 +405,7 @@ def run_path_reasoning(
         stoplist: additional stoplisted intermediate texts (lowercased)
         preferred_predicates: optional list of canonical predicate labels to boost in scoring
         preferred_predicate_boost_factor: multiplier for confidence when preferred predicates found
+        job_domain: optional domain override from job config
 
     Returns:
         List of hypothesis dicts (sorted by confidence desc).
@@ -486,7 +488,7 @@ def run_path_reasoning(
     
     # Phase 4.6: Batch domain resolution (only on passed hypotheses)
     llm_client = get_llm_service()
-    final_hypotheses = resolve_domains_batch(passed_hypotheses, llm_client)
+    final_hypotheses = resolve_domains_batch(passed_hypotheses, llm_client, job_domain=job_domain)
     
     # Sort hypotheses by confidence desc, deterministic tie-break by source->target
     final_hypotheses.sort(key=lambda h: (-h["confidence"], h["source"], h["target"]))

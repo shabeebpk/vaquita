@@ -14,6 +14,7 @@ from app.storage.models import Job, File, IngestionSource, IngestionSourceType, 
 from app.storage.db import engine
 from app.config.job_config import JobConfig
 from events import publish_event
+from presentation.events import push_presentation_event
 
 logger = logging.getLogger(__name__)
 
@@ -40,58 +41,7 @@ from app.config.admin_policy import admin_policy
 _SEMANTIC_SIMILARITY_THRESHOLD = admin_policy.algorithm.graph_merging.similarity_threshold
 _MIN_NODE_TEXT_LENGTH = admin_policy.algorithm.graph_merging.min_node_text_length
 
-# Stage -1: Classification and Routing
-# ============================================================================
-
-@celery_app.task(
-    name="stage.classify",
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 3, "countdown": 5}
-)
-def classify_stage(self, job_id: int, text: str, role: str = "user"):
-    """Classifies user input and routes to ingestion if needed."""
-    from app.input.classifier import get_classifier, ClassificationLabel
-    
-    publish_event({"job_id": job_id, "stage": "classification", "status": "started"})
-    
-    with Session(engine) as session:
-        # 1. Store the message
-        msg = ConversationMessage(
-            job_id=job_id,
-            role=role,
-            message_type=MessageType.TEXT.value,
-            content=text.strip()
-        )
-        session.add(msg)
-        session.flush()
-        
-        # 2. Classify and Handle
-        classifier = get_classifier()
-        classification = classifier.classify(text, job_id=job_id, session=session)
-        
-        logger.info(f"Job {job_id} message {msg.id} classified as {classification.label.value}")
-        
-        # 3. Finalize and Route
-        session.commit()
-        
-        publish_event({
-            "job_id": job_id, 
-            "stage": "classification", 
-            "status": "completed", 
-            "label": classification.label.value,
-            "message_id": msg.id
-        })
-
-        # 4. Trigger Next Stage
-        if classification.label == ClassificationLabel.RESEARCH_SEED:
-            logger.info(f"Classified as SEED; triggering fetch stage for job {job_id}")
-            fetch_stage.delay(job_id)
-        elif classification.label == ClassificationLabel.EVIDENCE_INPUT:
-            logger.info(f"Classified as EVIDENCE; triggering ingestion stage for job {job_id}")
-            ingest_stage.delay(job_id)
-
-    return {"message_id": msg.id, "classification": classification.label.value}
+# (classify_stage removed; classification is now handled synchronously in app/api/chat.py)
 
 
 # ============================================================================
@@ -107,8 +57,6 @@ def classify_stage(self, job_id: int, text: str, role: str = "user"):
 def extract_stage(self, job_id: int, file_id: int):
     """Extraction of text from a single File and saves it as an IngestionSource."""
     from app.storage.models import File, IngestionSource, IngestionSourceType
-    
-    publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "started"})
     
     with Session(engine) as session:
         file_row = session.query(File).filter(File.id == file_id).first()
@@ -130,14 +78,11 @@ def extract_stage(self, job_id: int, file_id: int):
             )
             session.add(source)
             session.commit()
-            
-            publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "registered"})
             logger.info(f"File {file_id} registered for precision ingestion.")
             return True
             
         except Exception as e:
             logger.error(f"Extraction failed for file {file_id}: {e}")
-            publish_event({"job_id": job_id, "stage": "extraction", "file_id": file_id, "status": "failed", "error": str(e)})
             raise
 
 
@@ -153,7 +98,6 @@ def mark_ready_stage(result_list, job_id: int):
             job.status = "READY_TO_INGEST"
             session.commit()
             logger.info(f"Job {job_id} is now READY_TO_INGEST (Extraction Batch Done)")
-            publish_event({"job_id": job_id, "stage": "extraction", "status": "all_files_ready"})
             
     # Now trigger ingestion
     ingest_stage.delay(job_id)
@@ -174,24 +118,60 @@ def ingest_stage(self, job_id: int):
     """Processes all unprocessed IngestionSource rows into TextBlocks."""
     from app.ingestion.service import IngestionService
     
-    publish_event({"job_id": job_id, "stage": "ingestion", "status": "started"})
-    
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
         if not job:
             logger.warning(f"Job {job_id} not found for ingestion.")
-            publish_event({"job_id": job_id, "stage": "ingestion", "status": "failed", "error": "Job not found"})
             return
+        
+        # No safety gate: Reliance on chord/trigger synchronization.
+        # Ensure status is at least READY_TO_INGEST if called unexpectedly.
+        if job.status != "READY_TO_INGEST":
+             logger.info(f"Job {job_id} is in status '{job.status}'. Skipping ingestion trigger.")
+             return
 
     try:
-        IngestionService.ingest_job(job_id=job_id)
-        
+        ingest_result = IngestionService.ingest_job(job_id=job_id) or {}
+
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
             job.status = "INGESTED"
             session.commit()
-            
-        publish_event({"job_id": job_id, "stage": "ingestion", "status": "completed"})
+
+            # Gather ingestion metrics from DB
+            from app.storage.models import IngestionSource, IngestionSourceType, TextBlock
+            total_ingested = session.query(IngestionSource).filter(
+                IngestionSource.job_id == job_id
+            ).count()
+            paper_count = session.query(IngestionSource).filter(
+                IngestionSource.job_id == job_id,
+                IngestionSource.source_type == IngestionSourceType.PAPER_ABSTRACT.value
+            ).count()
+            upload_count = session.query(IngestionSource).filter(
+                IngestionSource.job_id == job_id,
+                IngestionSource.source_type == IngestionSourceType.PDF_TEXT.value
+            ).count()
+            total_blocks = session.query(TextBlock).filter(
+                TextBlock.job_id == job_id
+            ).count()
+
+        push_presentation_event(
+            job_id=job_id,
+            phase="INGESTION",
+            status=None,
+            result={
+                "total_ingested": total_ingested,
+                "paper_count": paper_count,
+                "upload_count": upload_count,
+                "abstract_only_count": paper_count,
+            },
+            metric={
+                "total_blocks": total_blocks,
+                "llms_used": admin_policy.algorithm.refinery.model,
+            },
+            next_action="triple_extraction",
+        )
+
         triple_stage.delay(job_id)
         
     except Exception as e:
@@ -220,8 +200,6 @@ def triple_stage(self, job_id: int):
     """Triple extraction of facts from ingested TextBlocks."""
     from app.triples.processor import process_job_triples
     
-    publish_event({"job_id": job_id, "stage": "triples", "status": "started"})
-    
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
         if not job or job.status != "INGESTED":
@@ -234,8 +212,24 @@ def triple_stage(self, job_id: int):
             job = session.query(Job).get(job_id)
             job.status = "TRIPLES_EXTRACTED"
             session.commit()
-            
-        publish_event({"job_id": job_id, "stage": "triples", "status": "completed"})
+
+        # Query triple count here
+        from app.storage.models import Triple, TextBlock
+        with Session(engine) as session:
+            total_triples = session.query(Triple).filter(Triple.job_id == job_id).count()
+            total_blocks = session.query(TextBlock).filter(TextBlock.job_id == job_id).count()
+
+        push_presentation_event(
+            job_id=job_id,
+            phase="TRIPLES",
+            status=None,
+            result={
+                "total_triples": total_triples,
+                "blocks_processed": total_blocks,
+                "avg_triples_per_block": round(total_triples / total_blocks, 2) if total_blocks else 0,
+            },
+            next_action="graph_building",
+        )
         structural_graph_stage.delay(job_id)
         
     except Exception as e:
@@ -257,8 +251,6 @@ def structural_graph_stage(self, job_id: int):
     """Compresses triples into a structural graph."""
     from app.graphs.structural import project_structural_graph
     from app.graphs.cache import set_structural_graph
-    
-    publish_event({"job_id": job_id, "stage": "structural_graph", "status": "started"})
     
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -282,7 +274,6 @@ def structural_graph_stage(self, job_id: int):
             job.status = "STRUCTURAL_GRAPH_BUILT"
             session.commit()
             
-        publish_event({"job_id": job_id, "stage": "structural_graph", "status": "completed"})
         sanitization_stage.delay(job_id)
         
     except Exception as e:
@@ -305,8 +296,6 @@ def sanitization_stage(self, job_id: int):
     from app.graphs.sanitize import sanitize_graph
     from app.graphs.cache import get_structural_graph, delete_structural_graph, set_structural_graph
     
-    publish_event({"job_id": job_id, "stage": "sanitization", "status": "started"})
-    
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
         if not job or job.status != "STRUCTURAL_GRAPH_BUILT":
@@ -328,7 +317,6 @@ def sanitization_stage(self, job_id: int):
             job.status = "GRAPH_SANITIZED"
             session.commit()
             
-        publish_event({"job_id": job_id, "stage": "sanitization", "status": "completed"})
         semantic_merging_stage.delay(job_id)
         
     except Exception as e:
@@ -353,8 +341,6 @@ def semantic_merging_stage(self, job_id: int):
     from app.graphs.cache import get_structural_graph, delete_structural_graph
     from app.graphs.persistence import persist_semantic_graph
     
-    publish_event({"job_id": job_id, "stage": "semantic_merging", "status": "started"})
-    
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
         if not job or job.status != "GRAPH_SANITIZED":
@@ -375,13 +361,29 @@ def semantic_merging_stage(self, job_id: int):
         
         delete_structural_graph(job_id)
         persist_semantic_graph(job_id, semantic_graph)
-        
+
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
             job.status = "GRAPH_SEMANTIC_MERGED"
             session.commit()
-            
-        publish_event({"job_id": job_id, "stage": "semantic_merging", "status": "completed"})
+
+        _nodes = semantic_graph.get("nodes") or []
+        _edges = semantic_graph.get("edges") or []
+        _version = semantic_graph.get("version", 1)
+        _merges = semantic_graph.get("merge_count", len(_nodes))
+
+        push_presentation_event(
+            job_id=job_id,
+            phase="GRAPH",
+            status=None,
+            result={
+                "node_count": len(_nodes),
+                "edge_count": len(_edges),
+                "graph_version": _version,
+                "semantic_merges": _merges,
+            },
+            next_action="path_reasoning",
+        )
         path_reasoning_stage.delay(job_id)
         
     except Exception as e:
@@ -406,8 +408,6 @@ def path_reasoning_stage(self, job_id: int):
     from app.path_reasoning import run_path_reasoning
     from app.path_reasoning.persistence import persist_hypotheses, delete_all_hypotheses_for_job
     from app.path_reasoning.filtering import filter_hypotheses
-    
-    publish_event({"job_id": job_id, "stage": "path_reasoning", "status": "started"})
     
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -457,7 +457,18 @@ def path_reasoning_stage(self, job_id: int):
                 }
                 job2.status = "PATH_REASONING_DONE"
                 session2.commit()
-            publish_event({"job_id": job_id, "stage": "path_reasoning", "status": "completed", "mode": "verification"})
+            push_presentation_event(
+                job_id=job_id,
+                phase="PATHREASONING",
+                status="VERIFICATION",
+                result={
+                    "hypothesis_count": 1,
+                    "passed_count": 1,
+                    "hubs_suppressed": 0,
+                    "hub_suppression_summary": "Verification bypasses hub suppression.",
+                },
+                next_action="decision",
+            )
             decision_stage.delay(job_id)
             return
 
@@ -481,6 +492,7 @@ def path_reasoning_stage(self, job_id: int):
         stoplist = set(job_config.path_reasoning_config.stoplist)
         preferred_predicates = job_config.hypothesis_config.preferred_predicates
         boost_factor = admin_policy.algorithm.path_reasoning_defaults.preferred_predicate_boost_factor
+        job_domain = job_config.domain
 
         # Expand seeds to include affected nodes so reasoning focuses on changed area
         effective_seeds = list(set(seeds or []) | set(affected_nodes))
@@ -492,6 +504,7 @@ def path_reasoning_stage(self, job_id: int):
             stoplist=stoplist,
             preferred_predicates=preferred_predicates,
             preferred_predicate_boost_factor=boost_factor,
+            job_domain=job_domain,
         )
 
         passed_hypotheses, failed_hypotheses = filter_hypotheses(hypotheses, persisted_graph)
@@ -503,8 +516,25 @@ def path_reasoning_stage(self, job_id: int):
             job = session.query(Job).get(job_id)
             job.status = "PATH_REASONING_DONE"
             session.commit()
-            
-        publish_event({"job_id": job_id, "stage": "path_reasoning", "status": "completed"})
+
+        _passed = [h for h in passed_hypotheses if isinstance(h, dict)]
+        # Project hypotheses to graph for presentation payload
+        from app.path_reasoning.persistence import project_hypotheses_to_graph
+        projected_graph = project_hypotheses_to_graph(job_id, persisted_graph)
+
+        push_presentation_event(
+            job_id=job_id,
+            phase="PATHREASONING",
+            status=None,
+            result={
+                "hypothesis_count": len(hypotheses),
+                "survived_permanent_filter": len(passed_hypotheses),
+                "permanently_rejected": len(failed_hypotheses),
+                "hub_suppression_summary": f"Permanently rejected {len(failed_hypotheses)} hypotheses (hub/structural rules). {len(passed_hypotheses)} survived for decision.",
+            },
+            payload={"graph": projected_graph},
+            next_action="decision",
+        )
         decision_stage.delay(job_id)
         
     except Exception as e:
@@ -527,8 +557,6 @@ def decision_stage(self, job_id: int):
     from app.graphs.persistence import get_semantic_graph
     from app.path_reasoning.persistence import get_hypotheses
     from app.decision.controller import get_decision_controller
-    
-    publish_event({"job_id": job_id, "stage": "decision", "status": "started"})
     
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -559,19 +587,31 @@ def decision_stage(self, job_id: int):
                 job_metadata["verification_result"] = job.result.get("verification_result")
 
         controller = get_decision_controller()
-        controller.decide(
+        decision_result = controller.decide(
             job_id=job_id,
             semantic_graph=persisted_graph,
             hypotheses=hypotheses,
             job_metadata=job_metadata,
         )
+        decision_label = decision_result.get("decision_label", "unknown")
         
         with Session(engine) as session:
             job = session.query(Job).get(job_id)
             job.status = "RUNNING_HANDLERS"
             session.commit()
             
-        publish_event({"job_id": job_id, "stage": "decision", "status": "completed"})
+        # Placeholder for top-level decision summary (Detailed events come from individual handlers)
+        push_presentation_event(
+            job_id=job_id,
+            phase="DECISION",
+            status=None,
+            result={
+                "message": f"Decision reached: {decision_label}. Executing strategy.",
+                "decision": decision_label
+            },
+            next_action=decision_label,
+        )
+
         handler_execution_stage.delay(job_id)
         
     except Exception as e:
@@ -595,8 +635,6 @@ def handler_execution_stage(self, job_id: int):
     from app.graphs.persistence import get_semantic_graph
     from app.path_reasoning.persistence import get_hypotheses
     from app.decision.handlers.controller import get_handler_controller
-    
-    publish_event({"job_id": job_id, "stage": "handlers", "status": "started"})
     
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -656,23 +694,20 @@ def handler_execution_stage(self, job_id: int):
             job = session.query(Job).get(job_id)
             status = job.status
             
-            publish_event({"job_id": job_id, "stage": "handlers", "status": "completed", "outcome": status})
-            
             if status == "FETCH_QUEUED":
                 logger.info(f"Handler for job {job_id} requested FETCH_QUEUED; triggering fetch stage.")
                 fetch_stage.delay(job_id)
-            
+
             elif status == "DOWNLOAD_QUEUED":
                 logger.info(f"Handler for job {job_id} requested DOWNLOAD_QUEUED; triggering download stage.")
                 download_stage.delay(job_id)
-            
-            elif status == "COMPLETED":
-                logger.info(f"Job {job_id} reached terminal state: COMPLETED")
-                # Optimization: No next task needed
 
             elif status == "NEED_MORE_INPUT":
                 logger.info(f"Job {job_id} paused: NEED_MORE_INPUT (Insufficient signal)")
-                
+
+            elif status == "COMPLETED":
+                logger.info(f"Job {job_id} reached terminal state: COMPLETED")
+
             else:
                 logger.error(f"Job {job_id} transitioned to unhandled status: {status}. Halting task chain.")
     except Exception as e:
@@ -691,14 +726,12 @@ def handler_execution_stage(self, job_id: int):
     retry_kwargs={"max_retries": 3, "countdown": 120},
     retry_backoff=True
 )
-def fetch_stage(self, job_id: int):
+def fetch_stage(self, job_id: int, wait_for_chord: bool = False):
     """Executes the literature fetch pipeline."""
     from app.graphs.persistence import get_semantic_graph
     from app.path_reasoning.persistence import get_hypotheses
     from app.fetching.service import FetchService
     from app.llm import get_llm_service
-    
-    publish_event({"job_id": job_id, "stage": "fetch", "status": "started"})
     
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
@@ -739,22 +772,62 @@ def fetch_stage(self, job_id: int):
             logger.info("\n\n\n\n---fetch---\n\n\n\n")
         
         with Session(engine) as session:
+            # Calculate fetch metrics for presentation
+            from app.storage.models import SearchQuery, SearchQueryRun, JobPaperEvidence, IngestionSource, IngestionSourceType
+            _fetch_searches = session.query(SearchQueryRun).filter(SearchQueryRun.job_id == job_id).count()
+            _fetch_queries = session.query(SearchQuery).filter(SearchQuery.job_id == job_id).count()
+            _fetch_papers = session.query(JobPaperEvidence).filter(JobPaperEvidence.job_id == job_id).count()
+            _fetch_abstract_only = session.query(IngestionSource).filter(
+                IngestionSource.job_id == job_id,
+                IngestionSource.source_type == IngestionSourceType.PAPER_ABSTRACT.value
+            ).count()
+
             if verify_fetch_sources_ready(job_id, session):
                 job = session.query(Job).get(job_id)
                 job.status = "READY_TO_INGEST"
                 session.commit()
             
-                publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "sources_ready"})
+                # Fetch structured event
+                push_presentation_event(
+                    job_id=job_id,
+                    phase="FETCH",
+                    status=None,
+                    result={
+                        "searches_run": _fetch_searches,
+                        "queries_created": _fetch_queries,
+                        "papers_retrieved": _fetch_papers,
+                        "abstract_only_count": _fetch_abstract_only,
+                    },
+                    next_action="ingestion",
+                )
                 # Chain back to start
-                ingest_stage.delay(job_id)
+                if not wait_for_chord:
+                    # Chaining requires status alignment
+                    job = session.query(Job).get(job_id)
+                    job.status = "READY_TO_INGEST"
+                    session.commit()
+                    ingest_stage.delay(job_id)
             else:
-                publish_event({"job_id": job_id, "stage": "fetch", "status": "completed", "outcome": "no_sources"})
-                # No new papers; return to decision stage to reconsider strategy (e.g. try different query or halt)
+                push_presentation_event(
+                    job_id=job_id,
+                    phase="FETCH",
+                    status=None,
+                    result={
+                        "searches_run": _fetch_searches,
+                        "queries_created": _fetch_queries,
+                        "papers_retrieved": 0,
+                        "abstract_only_count": 0,
+                    },
+                    next_action="decision" if not wait_for_chord else "waiting",
+                )
+                # No new papers; return to decision stage
                 job = session.query(Job).get(job_id)
-                if job:
+                if job and not wait_for_chord:
                     job.status = "PATH_REASONING_DONE"
                     session.commit()
                     decision_stage.delay(job_id)
+            
+            return True # Success for chord
     
     except Exception as e:
         logger.error(f"Fetch stage failed for job {job_id}: {e}")
@@ -777,8 +850,6 @@ def download_stage(self, job_id: int):
     """Downloads papers prioritized by impact score."""
     from app.fetching.downloader import get_paper_downloader
     
-    publish_event({"job_id": job_id, "stage": "download", "status": "started"})
-    
     with Session(engine) as session:
         job = session.query(Job).get(job_id)
         if not job or job.status != "DOWNLOAD_QUEUED":
@@ -795,7 +866,29 @@ def download_stage(self, job_id: int):
             job.status = "READY_TO_INGEST"
             session.commit()
             
-        publish_event({"job_id": job_id, "stage": "download", "status": "completed", "papers_downloaded": count})
+        # Gather download metrics
+        from app.storage.models import JobPaperEvidence, Paper
+        with Session(engine) as session:
+            _paper_evidence = session.query(JobPaperEvidence).filter(
+                JobPaperEvidence.job_id == job_id,
+                JobPaperEvidence.evaluated == True,
+            ).all()
+            _impact_scores = [e.impact_score for e in _paper_evidence if e.impact_score is not None]
+            _impact_range = f"{min(_impact_scores):.2f}–{max(_impact_scores):.2f}" if _impact_scores else "N/A"
+
+        push_presentation_event(
+            job_id=job_id,
+            phase="DOWNLOAD",
+            status=None,
+            result={
+                "papers_downloaded": count,
+            },
+            metric={
+                "impact_score_range": _impact_range,
+                "papers_evaluated": len(_paper_evidence),
+            },
+            next_action="ingestion",
+        )
         ingest_stage.delay(job_id)
         
     except Exception as e:

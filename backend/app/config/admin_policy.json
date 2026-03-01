@@ -125,9 +125,9 @@
         "signature_length": 64,
         "initial_reputation": 0,
         "verification_batch_size": 5,
-        "fetch_batch_size": 3,
+        "fetch_batch_size": 2,
         "results_limit": 10,
-        "top_k_hypotheses": 1,
+        "top_k_hypotheses": 2,
         "fetch_params": {
             "timeout_seconds": 30,
             "retry_attempts": 3
@@ -181,7 +181,8 @@
             "^[^\\w\\s]$",
             "^\\.{2,}$",
             "^[_\\-\\s]*$",
-            "^[0-9\\.\\-]{1,3}$"
+            "^[0-9\\.\\-]+$",
+            "^[0-9\\.\\-]+%$"
         ],
         "node_removal_exact": [
             "the",
@@ -226,5 +227,27 @@
     },
     "downloader": {
         "batch_size": 1
+    },
+    "presentation": {
+        "llm_order": [
+            "nvidia"
+        ],
+        "temperature": 0.6,
+        "max_tokens": 300,
+        "prompt_assets": {
+            "CREATION": "presentation_creation.txt",
+            "INGESTION": "presentation_ingestion.txt",
+            "TRIPLES": "presentation_triples.txt",
+            "GRAPH": "presentation_graph.txt",
+            "PATHREASONING": "presentation_path_reasoning.txt",
+            "DECISION": "presentation_decision.txt",
+            "DECISION_haltconfident": "presentation_decision_haltconfident.txt",
+            "DECISION_nohypo": "presentation_decision_nohypo.txt",
+            "DECISION_found": "presentation_decision_found.txt",
+            "DECISION_notfound": "presentation_decision_notfound.txt",
+            "DECISION_insufficientsignal": "presentation_decision_insufficientsignal.txt",
+            "FETCH": "presentation_fetch.txt",
+            "DOWNLOAD": "presentation_download.txt"
+        }
     }
 }

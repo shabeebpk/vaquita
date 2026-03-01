@@ -90,8 +90,12 @@ class LLMService:
             logger.warning("generate() called with invalid prompt.")
             return ""
 
+        # Extract custom fallback order from kwargs if provided (Universal Signature Override)
+        # Using .pop() so it's NOT passed down to individual provider generate() calls
+        order = kwargs.pop("fallback_order", self.policy.fallback_order)
+        
         errors = []
-        for provider_id in self.policy.fallback_order:
+        for provider_id in order:
             provider = self.providers.get(provider_id)
             if not provider:
                 continue
