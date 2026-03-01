@@ -1,0 +1,27 @@
+{
+  "name": "literature-review-frontend",
+  "version": "1.0.0",
+  "description": "Interactive frontend for Literature Review System with dual-mode operation and real-time event streaming",
+  "keywords": [
+    "literature-review",
+    "knowledge-graph",
+    "interactive-visualization",
+    "real-time-streaming",
+    "discovery",
+    "verification"
+  ],
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "echo 'Open index.html in your browser or use: python -m http.server 8080'",
+    "dev": "http-server . -p 8080 --cors",
+    "serve": "python -m http.server 8080"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}

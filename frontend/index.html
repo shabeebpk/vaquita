@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Literature Review System</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Vis.js for interactive graphs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
+    <!-- Configuration -->
+    <script src="config.js"></script>
+</head>
+<body>
+    <!-- Mode Switch (Top Right Corner) -->
+    <div class="mode-switch-container">
+        <label class="mode-toggle">
+            <input type="checkbox" id="modeToggle" class="toggle-checkbox">
+            <span class="toggle-label">
+                <span class="toggle-text-discovery">Change to Verification</span>
+                <span class="toggle-text-verification">Change to Discovery</span>
+            </span>
+        </label>
+    </div>
+
+    <!-- Header Bar -->
+    <header class="header">
+        <div class="header-content">
+            <h1 class="app-title">Literature Review System</h1>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-container">
+        <div class="content-area" id="contentArea">
+            <div class="ready-message" id="readyMessage">
+                <div class="ready-icon">🔍</div>
+                <h2>Ready for Discovery Mode</h2>
+                <p>Upload documents and research topics to begin analysis</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer Form -->
+    <footer class="footer">
+        <form class="input-form" id="inputForm">
+            <!-- Discovery Mode Form -->
+            <div class="discovery-form-wrapper" id="discoveryForm">
+                <!-- File list - horizontally stacked above form -->
+                <div class="file-list" id="fileList"></div>
+                
+                <!-- Main form row -->
+                <div class="form-row">
+                    <label class="file-upload-label" for="fileInput">
+                        <span class="file-icon">📎</span>
+                    </label>
+                    <textarea 
+                        id="contentInput" 
+                        class="text-input" 
+                        placeholder="Enter your research topic or question..."
+                        rows="2"
+                    ></textarea>
+                    <button type="submit" class="submit-btn discover-submit" title="Send">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M16.6915026,12.4744748 L3.50612381,13.2599618 C3.19218622,13.2599618 3.03521743,13.4170592 3.03521743,13.5741566 L1.15159189,20.0151496 C0.8376543,20.8006365 0.99,21.89 1.77946707,22.52 C2.41,22.99 3.50612381,23.1 4.13399899,22.8429026 L21.714504,14.0454487 C22.6563168,13.5741566 23.1272231,12.6315722 22.9702544,11.6889879 L4.13399899,1.16346272 C3.50612381,-0.1 2.40999214,-0.0858926449 1.77946707,0.545126353 C0.994623095,1.16346272 0.837654326,2.25281443 1.15159189,3.03830095 L3.03521743,9.4792938 C3.03521743,9.63639124 3.34915502,9.79348869 3.50612381,9.79348869 L16.6915026,10.5789756 C16.6915026,10.5789756 17.1624089,10.5789756 17.1624089,11.0502677 L17.1624089,12.0070526 C17.1624089,12.4744748 16.6915026,12.4744748 16.6915026,12.4744748 Z"></svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Hidden file input -->
+            <input 
+                type="file" 
+                id="fileInput" 
+                multiple 
+                accept=".pdf,.txt,.docx"
+                class="file-input"
+            >
+
+            <!-- Verification Mode Form -->
+            <div class="verification-form hidden" id="verificationForm">
+                <div class="form-row">
+                    <input 
+                        type="text" 
+                        id="entity1Input" 
+                        class="text-input entity-input" 
+                        placeholder="Entity 1 (e.g., Kiwi fruit)"
+                    >
+                    <input 
+                        type="text" 
+                        id="entity2Input" 
+                        class="text-input entity-input" 
+                        placeholder="Entity 2 (e.g., Cancer)"
+                    >
+                    <button type="submit" class="submit-btn verify-submit" title="Verify">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                    </button>
+                    <button type="button" class="clear-btn" id="clearBtn" title="Clear">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 4 19 18"></polyline>
+                            <polyline points="19 6 21 4 7 18"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <!-- Status Message -->
+        <div class="status-message hidden" id="statusMessage">
+            <span class="spinner"></span>
+            <span id="statusText">System is running...</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
